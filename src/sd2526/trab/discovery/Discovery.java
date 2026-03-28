@@ -15,6 +15,8 @@ import java.util.logging.Logger;
 import java.util.Map;
 import java.util.List;
 import java.util.stream.Collectors;
+import sd2526.trab.api.java.*;
+import sd2526.trab.api.java.Result.ErrorCode;
 
 /**
  * <p>
@@ -37,6 +39,7 @@ import java.util.stream.Collectors;
  */
 public class Discovery {
   private static Logger Log = Logger.getLogger(Discovery.class.getName());
+  private static final int MAX_RETRIES = 3;
 
   static {
     // addresses some multicast issues on some TCP/IP stacks
@@ -166,10 +169,10 @@ public class Discovery {
    * @param minReplies minimum number of requested URIs. Blocks until satisfied.
    * @return an array of URI with the service instances discovered.
    */
-  public URI[] knownUrisOf(String serviceName, String domain, int minReplies) {
+  public Result<URI[]> knownUrisOf(String serviceName, String domain, int minReplies) {
     String searchKey = serviceName + "@" + domain;
 
-    while (true) {
+    for (int i = 0; i < MAX_RETRIES; i++) {
       Map<URI, Long> instances = knownServices.getOrDefault(searchKey, new ConcurrentHashMap<>());
       long now = System.currentTimeMillis();
 
@@ -180,16 +183,16 @@ public class Discovery {
           .collect(Collectors.toList());
 
       if (activeUris.size() >= minReplies) {
-        return activeUris.toArray(new URI[0]);
+        return Result.ok(activeUris.toArray(new URI[0]));
       }
-
       try {
-        Thread.sleep(200);
+        Thread.sleep(DISCOVERY_RETRY_TIMEOUT);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
-        return new URI[0];
+        return Result.ok(new URI[0]);
       }
     }
+    return Result.error(ErrorCode.TIMEOUT);
   }
 
   // Main just for testing purposes

@@ -19,7 +19,7 @@ import sd2526.trab.api.java.*;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.rest.RestUsers;
 
-public class RestUsersClient {
+public class RestUsersClient implements Users {
   private static Logger Log = Logger.getLogger(RestUsersClient.class.getName());
 
   protected static final int READ_TIMEOUT = 5000;
@@ -50,7 +50,8 @@ public class RestUsersClient {
 
   // In this method they know the associated Rest function in the REST server
   // because of the single input
-  public Result<String> createUser(User user) {
+  @Override
+  public Result<String> postUser(User user) {
 
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
@@ -79,6 +80,7 @@ public class RestUsersClient {
     return Result.error(ErrorCode.TIMEOUT);
   }
 
+  @Override
   public Result<User> getUser(String name, String pwd) {
 
     for (int i = 0; i < MAX_RETRIES; i++) {
@@ -113,6 +115,7 @@ public class RestUsersClient {
 
   }
 
+  @Override
   public Result<User> updateUser(String name, String pwd, User info) {
     for (int i = 0; i < MAX_RETRIES; i++) {
 
@@ -145,6 +148,7 @@ public class RestUsersClient {
 
   }
 
+  @Override
   public Result<User> deleteUser(String name, String pwd) {
 
     for (int i = 0; i < MAX_RETRIES; i++) {
@@ -176,6 +180,7 @@ public class RestUsersClient {
     return Result.error(ErrorCode.TIMEOUT);
   }
 
+  @Override
   public Result<List<User>> searchUsers(String name, String pwd, String pattern) {
 
     for (int i = 0; i < MAX_RETRIES; i++) {

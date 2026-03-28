@@ -21,7 +21,7 @@ import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.rest.RestMessages;
 import sd2526.trab.api.rest.RestUsers;
 
-public class RestMessagesClient {
+public class RestMessagesClient implements Messages {
   private static Logger Log = Logger.getLogger(RestUsersClient.class.getName());
 
   protected static final int READ_TIMEOUT = 5000;
@@ -45,10 +45,11 @@ public class RestMessagesClient {
 
     this.client = ClientBuilder.newClient(config);
     // Create a target to the server who is implementing that specific interface
-    target = client.target(serverURI).path(RestUsers.PATH);
+    target = client.target(serverURI).path(RestMessages.PATH);
   }
 
-  public Result<String> createMessage(String pwd, Message msg) {
+  @Override
+  public Result<String> postMessage(String pwd, Message msg) {
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
         Response r = target.queryParam(RestMessages.PWD, pwd)
@@ -75,7 +76,8 @@ public class RestMessagesClient {
     return Result.error(ErrorCode.TIMEOUT);
   }
 
-  public Result<Message> getMessage(String name, String mid, String pwd) {
+  @Override
+  public Result<Message> getInboxMessage(String name, String mid, String pwd) {
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
         Response r = target.path(RestMessages.MBOX)
@@ -105,10 +107,15 @@ public class RestMessagesClient {
     return Result.error(ErrorCode.TIMEOUT);
   }
 
-  public Result<List<String>> getMessages(String name, String pwd, String query) {
+  @Override
+  public Result<List<String>> getAllInboxMessages(String name, String pwd) {
+    return searchInbox(name, pwd, "");
+  }
+
+  @Override
+  public Result<List<String>> searchInbox(String name, String pwd, String query) {
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
-        // Idk if the default value here in the query must be provided but probably not
         Response r = target.path(RestMessages.MBOX)
             .path(name)
             .queryParam(RestMessages.PWD, pwd)
@@ -118,26 +125,28 @@ public class RestMessagesClient {
             .get();
 
         int status = r.getStatus();
-        if (status == Status.OK.getStatusCode() && r.hasEntity())
+        if (status == Status.OK.getStatusCode() && r.hasEntity()) {
           return Result.ok(r.readEntity(new GenericType<List<String>>() {
           }));
-        else
+        } else {
           return Result.error(getErrorCodeFrom(status));
+        }
       } catch (ProcessingException e) {
-        Log.info(e.getMessage());
+        Log.info("Retry " + (i + 1) + " due to: " + e.getMessage());
         try {
           Thread.sleep(RETRY_SLEEP);
         } catch (InterruptedException x) {
-          // Nothing to do here
         }
       } catch (Exception x) {
-        x.getStackTrace();
+        x.printStackTrace();
+        break;
       }
     }
     return Result.error(ErrorCode.TIMEOUT);
   }
 
-  public Result<Void> removeMessageFromInBox(String name, String mid, String pwd) {
+  @Override
+  public Result<Void> removeInboxMessage(String name, String mid, String pwd) {
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
         // Idk if the default value here in the query must be provided but probably not
@@ -149,7 +158,7 @@ public class RestMessagesClient {
             .delete();
 
         int status = r.getStatus();
-        if (status == Status.OK.getStatusCode() && r.hasEntity())
+        if (status == Status.OK.getStatusCode() || status == Status.NO_CONTENT.getStatusCode())
           return Result.ok();
         else
           return Result.error(getErrorCodeFrom(status));
@@ -167,7 +176,8 @@ public class RestMessagesClient {
     return Result.error(ErrorCode.TIMEOUT);
   }
 
-  public Result<Void> deleteMessageSent(String name, String mid, String pwd) {
+  @Override
+  public Result<Void> deleteMessage(String name, String mid, String pwd) {
     for (int i = 0; i < MAX_RETRIES; i++) {
       try {
         // Idk if the default value here in the query must be provided but probably not
@@ -178,7 +188,7 @@ public class RestMessagesClient {
             .delete();
 
         int status = r.getStatus();
-        if (status == Status.OK.getStatusCode() && r.hasEntity())
+        if (status == Status.OK.getStatusCode() || status == Status.NO_CONTENT.getStatusCode())
           return Result.ok();
         else
           return Result.error(getErrorCodeFrom(status));
