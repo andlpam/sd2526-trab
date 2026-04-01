@@ -10,6 +10,8 @@ import jakarta.persistence.ManyToMany;
 import sd2526.trab.client.rest.RestUsersClient;
 import sd2526.trab.server.persistence.Hibernate;
 import java.util.logging.Logger;
+
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Entity;
 import java.util.List;
 
@@ -17,7 +19,7 @@ import java.util.List;
 public class UserInbox {
   @Id
   private String userId;
-  @ManyToMany(fetch = FetchType.EAGER)
+  @ManyToMany(fetch = FetchType.EAGER, cascade = CascadeType.PERSIST)
   @JoinTable(name = "UserMessages")
   private Set<Message> messages;
   private static Logger Log = Logger.getLogger(RestUsersClient.class.getName());

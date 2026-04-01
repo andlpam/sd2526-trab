@@ -1,6 +1,5 @@
 package sd2526.trab.server.resources;
 
-
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
 import sd2526.trab.discovery.Discovery;
@@ -59,7 +58,13 @@ public class MessagesResource implements RestMessages {
     return address.substring(address.lastIndexOf("@") + 1);
   }
 
+  // It can have the display name if it is from other domain or not.
   private String getOnlyTheName(String address) {
+    String[] tmp = null;
+    if (address.contains(" ")) {
+      tmp = address.split(" ");
+      return tmp[tmp.length - 1].split("@")[0];
+    }
     return address.split("@")[0];
   }
 
@@ -67,8 +72,15 @@ public class MessagesResource implements RestMessages {
     return destination.matches(REGEX_LOCAL) && getDomain(destination).equals(this.domain);
   }
 
+  // It can have the display name so we need to remove it
   private String formatSenderNameFromMsg(Message msg) {
+    String[] tmp = null;
     String sender = msg.getSender();
+    if (sender.contains(" ")) {
+      tmp = sender.split(" ");
+      sender = tmp[tmp.length - 1];
+
+    }
     return sender.substring(1, sender.length() - 1);
   }
 
@@ -103,6 +115,9 @@ public class MessagesResource implements RestMessages {
 
   private Message checkIfMessageExist(String msgId, String userName) {
     UserInbox usrInbox = hibernate.get(UserInbox.class, userName);
+    if (usrInbox == null) {
+      return null;
+    }
     return usrInbox.checkIfMessageInInbox(msgId);
   }
 
@@ -220,7 +235,7 @@ public class MessagesResource implements RestMessages {
         // Create a error message
         Message notification = new Message();
         notification.setId(originalId + "." + destination_address); // mid.user
-        notification.setSender("System");
+        notification.setSender("<System>");
         notification.setDestination(new HashSet<>(Arrays.asList(sender))); // Returns the original remetent
         notification.setCreationTime(System.currentTimeMillis());
         notification.setContents(msg.getContents());
@@ -257,12 +272,14 @@ public class MessagesResource implements RestMessages {
           // If does not exist in the local server check the user server to see if it
           // exists
           RestUsersClient usersClient = getLocalUsersClient();
-          Result<List<User>> user = usersClient.searchUsers(sender, pwd, des);
+          Result<List<User>> user = usersClient.searchUsers(getOnlyTheName(sender), pwd, des);
           if (user.isOK()) {
+
             // Create a inbox for him
             // If it exists then create a inbox for that user
             try {
-              hibernate.persist(new UserInbox(des));
+              usrIn = new UserInbox(des);
+              hibernate.persist(usrIn);
             } catch (ConstraintViolationException e) {
               e.printStackTrace();
               Log.info("User entry already exists in the inbox database");
@@ -282,12 +299,19 @@ public class MessagesResource implements RestMessages {
       }
 
       try {
-        usrIn = hibernate.get(UserInbox.class, des);
+        // In the first time he inserts the message and in the others he can update the
+        // msg or do nothing about it.
+        hibernate.update(msg);
+
+        usrIn.addMessage(msg);
+
+        hibernate.update(usrIn);
+
       } catch (Exception e) {
+        Log.severe("Error saving in the database " + e.getMessage());
         e.printStackTrace();
         return Result.error(ErrorCode.INTERNAL_ERROR);
       }
-      usrIn.addMessage(msg);
       return Result.ok();
     }
     // It is from other domain the destination
@@ -312,7 +336,7 @@ public class MessagesResource implements RestMessages {
 
         if (usrIn != null) {
           if (usrIn.checkIfMessageInInbox(msg))
-            removeFromUserInbox(des, msg.getId(), pwd);
+            removeFromUserInbox(getOnlyTheName(des), msg.getId(), pwd);
           // If the mailbox exists but there is no message there with that id it's ok also
 
         } // If it doesnt have a mailbox it is ok because the message doesnt exist
@@ -360,10 +384,19 @@ public class MessagesResource implements RestMessages {
       // Modify the sender format
       // Do a new creation time
       // He needs to see if the message is duplicated DO LATER....
+      RestUsersClient usersClient = getLocalUsersClient();
+      Result<User> result = usersClient.getUser(getOnlyTheName(sender_name), pwd);
+
+      if (!result.isOK()) {
+        Log.info("Password is incorrect or user does not exist.");
+        throw new WebApplicationException(Status.FORBIDDEN);
+      }
+
       String newId = UUID.randomUUID().toString();
       msg.setId(newId);
 
-      String new_sender_name = "<" + sender_name + ">";
+      String new_sender_name = result.value().getDisplayName() + " <" + sender_name + ">";
+
       msg.setSender(new_sender_name);
 
       msg.setCreationTime(System.currentTimeMillis());
@@ -375,22 +408,22 @@ public class MessagesResource implements RestMessages {
       Log.info("Sender name pattern is wrong");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    try {
-      hibernate.persist(msg);
-    } catch (ConstraintViolationException x) {
-      Log.info("Message already exists.");
-      x.printStackTrace();
-      throw new WebApplicationException(Status.CONFLICT);
-    } catch (Exception e) {
-      e.printStackTrace();
-      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-    }
     // LAST STEP: Send the message to the destinations
     // Message already sent by someone
     Set<String> destinations = msg.getDestination();
     for (String destination : destinations) {
       // if the destination is local and has the same domain
-      propagateMessage(pwd, msg, destination, POSTMESSAGE);
+      if (checkIfUserIsFromDomain(destination)) {
+
+        Result<Void> res = assignMessageToUsers(destination, pwd, msg);
+        if (!res.isOK()) {
+          Log.info("Failed to persist local message");
+          throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
+        }
+      } else {
+        propagateMessage(pwd, msg, destination, POSTMESSAGE);
+      }
+
     }
 
     return msg.getId();
@@ -402,12 +435,13 @@ public class MessagesResource implements RestMessages {
       Log.info("Password or Message null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    if (!checkUserExistenceAndPassword(name, pwd)) {
+    String fullName = name + "@" + this.domain;
+    if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
     }
     // This method can be null
-    Message msg = checkIfMessageExist(mid, name);
+    Message msg = checkIfMessageExist(mid, fullName);
     if (msg == null) {
       Log.info("The message doesn't exist.");
       throw new WebApplicationException(Status.NOT_FOUND);
@@ -423,9 +457,9 @@ public class MessagesResource implements RestMessages {
       Log.info("Name or pwd are null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-
+    String fullName = name + "@" + this.domain;
     // Confirm if the user exists and the pwd is right
-    if (!checkUserExistenceAndPassword(name, pwd)) {
+    if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
     }
@@ -433,7 +467,7 @@ public class MessagesResource implements RestMessages {
     // Get the InBox from the data base
     UserInbox inbox = null;
     try {
-      inbox = hibernate.get(UserInbox.class, name);
+      inbox = hibernate.get(UserInbox.class, fullName);
     } catch (Exception e) {
       Log.info("Error on accessing the data base: " + e.getMessage());
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
@@ -463,16 +497,16 @@ public class MessagesResource implements RestMessages {
       Log.info("Params can be null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-
+    String fullName = name + "@" + this.domain;
     // Check if the password is right and the user exists
-    if (!checkUserExistenceAndPassword(name, pwd)) {
+    if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
     }
 
     try {
       // Get the inBox of the user
-      UserInbox inbox = hibernate.get(UserInbox.class, name);
+      UserInbox inbox = hibernate.get(UserInbox.class, fullName);
 
       // If the inBox doesn't exist, the message isn't there
       if (inbox == null || inbox.getMessages().isEmpty()) {
@@ -525,9 +559,9 @@ public class MessagesResource implements RestMessages {
       Log.info("Name or pwd or query are null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-
+    String fullName = name + "@" + this.domain;
     // Check if the password is right and the user exists
-    if (!checkUserExistenceAndPassword(name, pwd)) {
+    if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
     }
@@ -535,7 +569,7 @@ public class MessagesResource implements RestMessages {
     // Get the InBox from the data base
     UserInbox inbox = null;
     try {
-      inbox = hibernate.get(UserInbox.class, name);
+      inbox = hibernate.get(UserInbox.class, fullName);
     } catch (Exception e) {
       Log.severe("Error on accessing the data base: " + e.getMessage());
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
@@ -551,8 +585,8 @@ public class MessagesResource implements RestMessages {
       Log.info("Name or pwd or query are null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-
-    if (!checkUserExistenceAndPassword(name, pwd)) {
+    String fullName = name + "@" + this.domain;
+    if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
     }

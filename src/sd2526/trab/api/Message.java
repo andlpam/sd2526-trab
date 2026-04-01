@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -23,6 +24,7 @@ public class Message {
 	private Set<String> destination;
 	private long creationTime;
 	private String subject;
+	@Column(length = 1024)
 	private String contents;
 
 	public Message() {

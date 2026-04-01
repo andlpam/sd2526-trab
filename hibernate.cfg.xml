@@ -7,7 +7,7 @@
 		<property name="connection.username">sa</property>
 		<property name="connection.password"></property>
 		<!-- JDBC connection pool settings ... using built-in test pool -->
-		<property name="connection.pool_size">1</property>
+		<property name="connection.pool_size">10</property>
 		<!-- Echo the SQL to stdout -->
 		<property name="show_sql">true</property>
 		<!-- Set the current session context -->
@@ -22,5 +22,7 @@
 		<property name="hibernate.dbcp.maxWaitMillis">-1</property>
 		<!-- Entities stored in the database -->
 		<mapping class="sd2526.trab.api.User" />
+		<mapping class="sd2526.trab.api.UserInbox" />
+		<mapping class="sd2526.trab.api.Message" />
 	</session-factory>
 </hibernate-configuration>
