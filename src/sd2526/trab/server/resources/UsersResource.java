@@ -3,7 +3,6 @@ package sd2526.trab.server.resources;
 import java.util.List;
 import java.net.URI;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 import org.hibernate.exception.ConstraintViolationException;
 import jakarta.inject.Singleton;
 import jakarta.ws.rs.WebApplicationException;
@@ -141,6 +140,10 @@ public class UsersResource implements RestUsers {
     // Check if parameters are valid
     if (name == null || pwd == null || info == null) {
       Log.info("Name or password or info are null.");
+      throw new WebApplicationException(Status.BAD_REQUEST);
+    }
+
+    if (info.getName() != null && !info.getName().equals(name)) {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 

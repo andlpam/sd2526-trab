@@ -6,23 +6,13 @@ import sd2526.trab.discovery.Discovery;
 import sd2526.trab.api.java.*;
 import sd2526.trab.api.rest.RestMessages;
 import sd2526.trab.api.rest.RestUsers;
-import java.util.UUID;
 import java.util.logging.Logger;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.*;
-import jakarta.validation.ConstraintViolationException;
-import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response.Status;
 import java.net.URI;
-import java.util.Map;
-import java.util.Set;
 import java.util.List;
-import java.util.HashSet;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.concurrent.ConcurrentHashMap;
-import sd2526.trab.server.persistence.Hibernate;
 
 public class GatewayResource implements RestMessages, RestUsers {
 

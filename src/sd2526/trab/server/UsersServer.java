@@ -7,7 +7,6 @@ import java.util.logging.Logger;
 import org.glassfish.jersey.jdkhttp.JdkHttpServerFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 
-import sd2526.trab.server.resources.MessagesResource;
 import sd2526.trab.server.resources.UsersResource;
 import sd2526.trab.discovery.Discovery;
 
@@ -39,22 +38,18 @@ public class UsersServer {
       String ip = InetAddress.getLocalHost().getHostAddress();
       String serverURI = String.format(SERVER_URI_FMT, ip, PORT);
 
-      // Loading Server
-      JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
-      Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
-
-      // Debugging
-      Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
       // Create the discovery and start the threads
-      Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, ip, domain, serverURI);
+      Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..
       UsersResource res = new UsersResource(discovery, domain);
       config.register(res);
       // Load the server
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
+      Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
     } catch (Exception e) {
       Log.severe(e.getMessage());
+      e.printStackTrace();
     }
   }
 }

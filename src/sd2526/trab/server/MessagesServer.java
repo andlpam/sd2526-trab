@@ -38,17 +38,16 @@ public class MessagesServer {
       String ip = InetAddress.getLocalHost().getHostAddress();
       String serverURI = String.format(SERVER_URI_FMT, ip, PORT);
 
-      // Debugging
-      Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
       // Create the discovery and start the threads
 
-      Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, ip, domain, serverURI);
+      Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..
       MessagesResource res = new MessagesResource(SERVICE_NAME, domain, discovery);
       config.register(res);
       // Load the server
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
+      Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
 
     } catch (Exception e) {
       Log.severe(e.getMessage());
