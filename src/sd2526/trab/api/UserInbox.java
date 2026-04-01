@@ -22,7 +22,7 @@ public class UserInbox {
   private Set<Message> messages;
   private static Logger Log = Logger.getLogger(RestUsersClient.class.getName());
 
-  public UserInbox() {
+  protected UserInbox() {
     this.messages = new HashSet<>();
   }
 

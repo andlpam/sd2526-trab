@@ -41,6 +41,7 @@ public class MessagesServer {
       // Debugging
       Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
       // Create the discovery and start the threads
+
       Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, ip, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..

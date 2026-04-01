@@ -1,6 +1,6 @@
 package sd2526.trab.server.resources;
 
-import sd2526.*;
+
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
 import sd2526.trab.discovery.Discovery;
@@ -29,6 +29,9 @@ public class MessagesResource implements RestMessages {
   private final String domain;
   private final String serviceName;
   private static Logger Log = Logger.getLogger(MessagesResource.class.getName());
+  private static final long DELETE_MESSAGE_TIME = 30000;
+  private static final boolean POSTMESSAGE = true;
+  private static final boolean DELETEMESSAGE = false;
 
   // Can only contain one @
   private static final String REGEX_LOCAL = "^[^@<>\\s]+@[^@<>\\s]+$";
@@ -103,18 +106,24 @@ public class MessagesResource implements RestMessages {
     return usrInbox.checkIfMessageInInbox(msgId);
   }
 
+  // WE NEED A FUNCTION THAT HANDLES NON-EXISTING DESTINATION
+  // WE NEED A FUNCTION THAT HANDLES SENDING
   private synchronized RestMessagesClient getMessagesClient(Message msg, String domain) {
     if (messagesClients.containsKey(domain)) {
       return messagesClients.get(domain);
     }
 
     try {
-      Result<URI[]> uris = d.knownUrisOf(this.serviceName, domain, 1);
+      Result<URI[]> uris = d.knownUrisOf("Gateway", domain, 1);
       if (!uris.isOK()) {
         // This might be wrong, fix later
-        // Timeout if server not being able to answer 5 seconds later
-        Log.info("Server is not being able to delivering uris by multicast.");
-        throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
+        // Might not have a gateway server
+        uris = d.knownUrisOf(this.serviceName, domain, 1);
+        if (!uris.isOK()) {
+          Log.info("Gateway and Messages server are unavailable.");
+          throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
+        }
+
       }
       messagesClients.putIfAbsent(domain, new RestMessagesClient(uris.value()[0]));
 
@@ -146,34 +155,18 @@ public class MessagesResource implements RestMessages {
       return localUsersClient;
 
     } catch (WebApplicationException w) {
-      // Deixamos passar o 503 para cima
+
       throw w;
     } catch (Exception e) {
-      // Cortamos o mal pela raiz! Se der erro grave, atiramos 500 em vez de devolver
-      // null
+
       e.printStackTrace();
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
     }
   }
 
-  private void forwardMessage(Message msg, String destination_address, String pwd) {
-    // if the destination is local and has the same domain
-    if (destination_address.matches(REGEX_LOCAL)) {
-      if (getDomain(destination_address).equals(this.domain)) {
-        assignMessageToUsers(destination_address, pwd, msg, localUsersClient);
-      } else {
-        forwardMessageToOtherDomain(msg, destination_address);
-      }
-    } // The destination doesn't follow the pattern
-    else {
-      Log.info("The destination doesn't follow the pattern");
-      throw new WebApplicationException(Status.BAD_REQUEST);
-    }
-  }
-
-  private void forwardMessageToOtherDomain(Message msg, String destination_address) {
+  private void propagateMessage(String pwd, Message msg, String destination_address, boolean choice) {
     String targetDomain = getDomain(destination_address); // Ex: "tecnico"
-    String sender = msg.getSender(); // Ex: "<nmp@fct>"
+    String sender = formatSenderNameFromMsg(msg); // Ex: "<nmp@fct>"
     String originalId = msg.getId();
 
     // New Thread to return the ID right away
@@ -186,44 +179,40 @@ public class MessagesResource implements RestMessages {
 
       while ((System.currentTimeMillis() - startTime) < timeoutMillis) {
         try {
-          // Search the Message server of the other domain
-          Result<URI[]> uris = d.knownUrisOf("Messages", targetDomain, 1);
-
-          if (uris.isOK() && uris.value().length > 0) {
-            URI remoteUri = uris.value()[0];
-            RestMessagesClient remoteClient = new RestMessagesClient(remoteUri);
-
-            // Sends the message
-            remoteClient.postMessage("", msg);
-
-            Log.info("Success! Message" + originalId + " delivered at " + destination_address);
+          // IMPORTANT....
+          // Here we are going to have a function to decide if we are going to ask to the
+          // user server or to other
+          // Messages server
+          Result<Void> result;
+          if (choice) {
+            result = assignMessageToUsers(destination_address, pwd, msg);
+          } else {
+            result = deleteMessageFromUsers(destination_address, pwd, msg);
+          }
+          // Everything well
+          if (result.isOK()) {
             success = true;
             break;
-          } else {
-            Log.info("Domain server " + targetDomain + " is down. Retrying...");
-          }
-
-        } catch (WebApplicationException e) {
-          // The server answered, but rejected the message
-          int status = e.getResponse().getStatus();
-          if (status == Status.FORBIDDEN.getStatusCode() || status == Status.NOT_FOUND.getStatusCode()) {
-            // The user doesn't exist in the domain
-            Log.warning("The destiny user doesn't exist " + destination_address);
+            // It doesn't need to try again because the error have no relation with the
+            // server condition
+          } else if (result.error() == ErrorCode.NOT_FOUND || result.error() == ErrorCode.FORBIDDEN
+              || result.error() == ErrorCode.BAD_REQUEST) {
             unknownUser = true;
             break;
           }
+          // The server is having a temporary error let's try again later
+          Thread.sleep(3000);
+          // The server had a processing error or is unvailable let's try again later
         } catch (Exception e) {
-          Log.warning("Net failed trying to contact " + targetDomain + ". Retrying...");
-        }
-
-        try {
-          Thread.sleep(2000);
-        } catch (InterruptedException ie) {
-          Thread.currentThread().interrupt();
-          break;
+          Log.warning("Failed attempt : " + e);
+          try {
+            Thread.sleep(3000);
+          } catch (InterruptedException x) {
+            Thread.currentThread().interrupt();
+            break;
+          }
         }
       }
-
       // Failed treatement
       if (!success) {
         Log.info("Generating a failed notification to the remetent " + sender);
@@ -243,55 +232,107 @@ public class MessagesResource implements RestMessages {
         }
 
         // Save the error notification in the data base
-        try {
-          String cleanSender = getOnlyTheName(sender) + "@" + getDomain(sender);
-          assignMessageToUsers(cleanSender, "", notification, localUsersClient);
-        } catch (Exception e) {
-          Log.severe("Erro ao guardar a notificação de falha na caixa do remetente.");
+
+        String cleanSender = getOnlyTheName(sender) + "@" + getDomain(sender);
+        Result<Void> senderResult = assignMessageToUsers(cleanSender, pwd, notification);
+        if (senderResult.isOK())
+          Log.info("Error message delivered to the sender.");
+        else {
+          Log.severe("Error message did not arrive to the sender.");
         }
       }
 
     }).start();
   }
 
-  private void assignMessageToUsers(String des, String pwd, Message msg, RestUsersClient usersClient) {
-    // See if it already exists in the local server
-    UserInbox usrIn = hibernate.get(UserInbox.class, des);
-    if (usrIn == null) {
-
-      String sender = formatSenderNameFromMsg(msg);
-      // If does not exist in the local server check the user server to see if it
-      // exists
-      Result<List<User>> user = usersClient.searchUsers(sender, pwd, des);
-      if (user.isOK()) {
-        // Create a inbox for him
-        // If it exists then create a inbox for that user
-        try {
-          hibernate.persist(user.value().get(0));
-        } catch (ConstraintViolationException e) {
-          e.printStackTrace();
-          Log.info("User entry already exists in the inbox database");
-        } catch (Exception x) {
-          x.printStackTrace();
-          throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+  private Result<Void> assignMessageToUsers(String des, String pwd, Message msg) {
+    String targetDomain = getDomain(des);
+    if (targetDomain.equals(this.domain)) {
+      UserInbox usrIn = null;
+      // See if it already exists in the local server
+      try {
+        usrIn = hibernate.get(UserInbox.class, des);
+        if (usrIn == null) {
+          String sender = formatSenderNameFromMsg(msg);
+          // If does not exist in the local server check the user server to see if it
+          // exists
+          RestUsersClient usersClient = getLocalUsersClient();
+          Result<List<User>> user = usersClient.searchUsers(sender, pwd, des);
+          if (user.isOK()) {
+            // Create a inbox for him
+            // If it exists then create a inbox for that user
+            try {
+              hibernate.persist(new UserInbox(des));
+            } catch (ConstraintViolationException e) {
+              e.printStackTrace();
+              Log.info("User entry already exists in the inbox database");
+              return Result.error(ErrorCode.CONFLICT);
+            } catch (Exception x) {
+              x.printStackTrace();
+              return Result.error(ErrorCode.INTERNAL_ERROR);
+            }
+            // The destination does not exist
+          } else {
+            return Result.error(ErrorCode.NOT_FOUND);
+          }
         }
-        // The destination does not exist
-      } else {
-        // 1. Modify the id to and the subject
-        Log.info("Message of the user failed.");
-        msg.setSubject("FAILED TO SEND " + msg.getId() + " TO " + sender);
-        msg.setId(msg.getId() + "." + sender);
-        // 2. Send to the message to the mailbox of the Sender
-        if (checkIfUserIsFromDomain(sender)) {
-          UserInbox senderInbox = hibernate.get(UserInbox.class, sender);
-        } else {
-          forwardMessageToOtherDomain(msg, sender);
-        }
+      } catch (Exception e) {
+        e.printStackTrace();
+        return Result.error(ErrorCode.INTERNAL_ERROR);
       }
 
+      try {
+        usrIn = hibernate.get(UserInbox.class, des);
+      } catch (Exception e) {
+        e.printStackTrace();
+        return Result.error(ErrorCode.INTERNAL_ERROR);
+      }
+      usrIn.addMessage(msg);
+      return Result.ok();
     }
-    // Put the message in the mailbox
-    usrIn.addMessage(msg);
+    // It is from other domain the destination
+    RestMessagesClient msgClient = getMessagesClient(msg, targetDomain);
+    Result<String> result = msgClient.postMessage(pwd, msg);
+    if (result.isOK()) {
+      return Result.ok();
+    }
+    // This might be an error-----------------------------
+    else
+      return Result.error(result);
+  }
+
+  private Result<Void> deleteMessageFromUsers(String des, String pwd, Message msg) {
+
+    String targetDomain = getDomain(des);
+    if (targetDomain.equals(this.domain)) {
+      UserInbox usrIn = null;
+      // See if the mailbox user exists
+      try {
+        usrIn = hibernate.get(UserInbox.class, des);
+
+        if (usrIn != null) {
+          if (usrIn.checkIfMessageInInbox(msg))
+            removeFromUserInbox(des, msg.getId(), pwd);
+          // If the mailbox exists but there is no message there with that id it's ok also
+
+        } // If it doesnt have a mailbox it is ok because the message doesnt exist
+        return Result.ok();
+
+      } catch (Exception e) {
+        e.printStackTrace();
+        return Result.error(ErrorCode.INTERNAL_ERROR);
+      }
+    }
+    RestMessagesClient msgClient = getMessagesClient(msg, targetDomain);
+
+    try {
+      Result<Void> result = msgClient.deleteMessage(des, msg.getId(), pwd);
+      return result;
+    } catch (Exception e) {
+      e.printStackTrace();
+      // We dont know the cause of the failure so we cannot give an exact status..
+      return Result.error(ErrorCode.TIMEOUT);
+    }
   }
 
   @Override
@@ -309,16 +350,23 @@ public class MessagesResource implements RestMessages {
       Log.info("Sender Name is none");
       throw new WebApplicationException(Status.BAD_REQUEST);
       // Message needs to be sent by this server case
-    } else if (checkUserExistenceAndPassword(sender_name, pwd) && msg.getId() == null
+    } else if (!checkUserExistenceAndPassword(sender_name, pwd)) {
+      Log.info("Password is incorrect or user does not exist.");
+      throw new WebApplicationException(Status.FORBIDDEN);
+    } else if (msg.getId() == null
         && getDomain(sender_name).equals(this.domain)) {
 
       // Assign the ID
       // Modify the sender format
+      // Do a new creation time
+      // He needs to see if the message is duplicated DO LATER....
       String newId = UUID.randomUUID().toString();
       msg.setId(newId);
 
       String new_sender_name = "<" + sender_name + ">";
       msg.setSender(new_sender_name);
+
+      msg.setCreationTime(System.currentTimeMillis());
 
     } // Message sent by other server case
     else if (sender_name.matches(REGEX_FORWARDING) && msg.getId() != null) {
@@ -327,14 +375,24 @@ public class MessagesResource implements RestMessages {
       Log.info("Sender name pattern is wrong");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
+    try {
+      hibernate.persist(msg);
+    } catch (ConstraintViolationException x) {
+      Log.info("Message already exists.");
+      x.printStackTrace();
+      throw new WebApplicationException(Status.CONFLICT);
+    } catch (Exception e) {
+      e.printStackTrace();
+      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+    }
     // LAST STEP: Send the message to the destinations
     // Message already sent by someone
     Set<String> destinations = msg.getDestination();
     for (String destination : destinations) {
       // if the destination is local and has the same domain
-      forwardMessage(msg, destination, pwd,);
+      propagateMessage(pwd, msg, destination, POSTMESSAGE);
     }
-    // -----------------------------------------------------
+
     return msg.getId();
   }
 
@@ -362,7 +420,7 @@ public class MessagesResource implements RestMessages {
   private List<String> getAllInboxMessages(String name, String pwd) {
     Log.info("getAllInboxMessages : name = " + name + "; pwd = " + pwd);
     if (name == null || pwd == null) {
-      Log.info("Name ou pwd são nulos.");
+      Log.info("Name or pwd are null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
@@ -449,7 +507,7 @@ public class MessagesResource implements RestMessages {
     Log.info("getMessages : name = " + name + "; pwd = " + pwd + "; query = " + query);
 
     if (name == null || pwd == null) {
-      Log.info("Name ou pwd são nulos.");
+      Log.info("Name or pwd are null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
@@ -484,6 +542,35 @@ public class MessagesResource implements RestMessages {
     }
 
     return inbox.getMessages(query);
+  }
+
+  @Override
+  public void deleteMessage(String name, String mid, String pwd) {
+
+    if (name == null || mid == null || pwd == null) {
+      Log.info("Name or pwd or query are null");
+      throw new WebApplicationException(Status.BAD_REQUEST);
+    }
+
+    if (!checkUserExistenceAndPassword(name, pwd)) {
+      Log.info("User doesn't exist or password is wrong");
+      throw new WebApplicationException(Status.FORBIDDEN);
+    }
+    try {
+      Message cur_message = hibernate.get(Message.class, mid);
+
+      if (cur_message.getCreationTime() + DELETE_MESSAGE_TIME <= System.currentTimeMillis()) {
+        Log.info("It is not possible to delete the message now. It does not generate an error.");
+      } else {
+        Set<String> destinations = cur_message.getDestination();
+        for (String des : destinations) {
+          propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+        }
+      }
+    } catch (Exception e) {
+      e.printStackTrace();
+      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+    }
   }
 
   public static ErrorCode getErrorCodeFrom(int status) {
