@@ -4,8 +4,7 @@ import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
 import sd2526.trab.discovery.Discovery;
 import sd2526.trab.api.java.*;
-import sd2526.trab.api.rest.RestMessages;
-import sd2526.trab.api.rest.RestUsers;
+import sd2526.trab.api.rest.RestGateway;
 import java.util.logging.Logger;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.*;
@@ -14,7 +13,7 @@ import jakarta.ws.rs.core.Response.Status;
 import java.net.URI;
 import java.util.List;
 
-public class GatewayResource implements RestMessages, RestUsers {
+public class GatewayResource implements RestGateway {
 
   private String serviceName;
   private String domain;

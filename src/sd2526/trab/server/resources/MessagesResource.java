@@ -7,6 +7,7 @@ import sd2526.trab.api.java.*;
 import sd2526.trab.api.rest.RestMessages;
 import java.util.UUID;
 import java.util.logging.Logger;
+
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.*;
 import jakarta.validation.ConstraintViolationException;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import sd2526.trab.server.persistence.Hibernate;
 
@@ -270,8 +272,10 @@ public class MessagesResource implements RestMessages {
           // If does not exist in the local server check the user server to see if it
           // exists
           RestUsersClient usersClient = getLocalUsersClient();
-          Result<List<User>> user = usersClient.searchUsers(getOnlyTheName(sender), pwd, des);
-          if (user.isOK()) {
+          // Result<List<User>> user = usersClient.searchUsers(getOnlyTheName(sender),
+          // pwd, des);
+          Result<List<User>> user = usersClient.searchUsers(getOnlyTheName(sender), pwd, getOnlyTheName(des));
+          if (user.isOK() && user.value() != null && !user.value().isEmpty()) {
 
             // Create a inbox for him
             // If it exists then create a inbox for that user
@@ -416,6 +420,13 @@ public class MessagesResource implements RestMessages {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
+    // 3. PERSISTIR A MENSAGEM ORIGINAL (Obrigatório antes de entregar)
+    try {
+      hibernate.persist(msg);
+    } catch (Exception e) {
+      // Se já existir na BD (ex: propagação), fazemos update
+      hibernate.update(msg);
+    }
     // LAST STEP: Send the message to the destinations
     // Message already sent by someone
     Set<String> destinations = msg.getDestination();
@@ -424,10 +435,41 @@ public class MessagesResource implements RestMessages {
       if (checkIfUserIsFromDomain(destination)) {
 
         Result<Void> res = assignMessageToUsers(destination, pwd, msg);
-        if (!res.isOK()) {
-          Log.info("Failed to persist local message");
+
+        if (!res.isOK() && res.error() == ErrorCode.NOT_FOUND) {
+          Log.info("Failure Notification: " + destination + " not found.");
+
+          String failureId = msg.getId() + "." + destination;
+          Message failureNotice = new Message();
+
+          failureNotice.setId(failureId);
+          // O sender do erro é o mesmo da mensagem original
+          failureNotice.setSender(msg.getSender());
+          failureNotice.setDestination(Collections.singleton(sender_name));
+
+          // Formato EXATO do Subject que o Tester quer
+          failureNotice.setSubject("FAILED TO SEND " + msg.getId() + " TO " + destination + ": UNKNOWN USER");
+
+          // O Tester espera que o corpo do erro tenha os mesmos conteúdos da original
+          failureNotice.setContents(msg.getContents());
+
+          // Assegura que tem tempo de criação
+          failureNotice.setCreationTime(System.currentTimeMillis());
+
+          // Guardar a notificação na BD
+          hibernate.persist(failureNotice);
+
+          // Entregar DIRETAMENTE na caixa de entrada do Sender original
+          UserInbox senderInbox = hibernate.get(UserInbox.class, sender_name);
+          if (senderInbox == null) {
+            senderInbox = new UserInbox(sender_name);
+            hibernate.persist(senderInbox);
+          }
+          senderInbox.addMessage(failureNotice);
+          hibernate.update(senderInbox);
+
+        } else if (!res.isOK())
           throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
-        }
       } else {
         propagateMessage(pwd, msg, destination, POSTMESSAGE);
       }
@@ -439,11 +481,12 @@ public class MessagesResource implements RestMessages {
 
   @Override
   public Message getMessage(String name, String mid, String pwd) {
+    Log.info("RECEBI PEDIDO: user=" + name + ", mid=" + mid + ", pwd=" + pwd);
     if (name == null || mid == null || pwd == null) {
       Log.info("Password or Message null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    String fullName = name + "@" + this.domain;
+    String fullName = name.contains("@") ? name : name + "@" + this.domain;
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
       throw new WebApplicationException(Status.FORBIDDEN);
@@ -465,7 +508,7 @@ public class MessagesResource implements RestMessages {
       Log.info("Name or pwd are null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    String fullName = name + "@" + this.domain;
+    String fullName = name.contains("@") ? name : name + "@" + this.domain;
     // Confirm if the user exists and the pwd is right
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
@@ -505,7 +548,7 @@ public class MessagesResource implements RestMessages {
       Log.info("Params can be null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    String fullName = name + "@" + this.domain;
+    String fullName = name.contains("@") ? name : name + "@" + this.domain;
     // Check if the password is right and the user exists
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
@@ -567,7 +610,7 @@ public class MessagesResource implements RestMessages {
       Log.info("Name or pwd or query are null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    String fullName = name + "@" + this.domain;
+    String fullName = name.contains("@") ? name : name + "@" + this.domain;
     // Check if the password is right and the user exists
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
@@ -586,52 +629,6 @@ public class MessagesResource implements RestMessages {
     return inbox.getMessages(query);
   }
 
-  /*
-   * @Override
-   * public void deleteMessage(String name, String mid, String pwd) {
-   * 
-   * if (name == null || mid == null || pwd == null) {
-   * Log.info("Name or pwd or query are null");
-   * throw new WebApplicationException(Status.BAD_REQUEST);
-   * }
-   * String fullName = name + "@" + this.domain;
-   * if (!checkUserExistenceAndPassword(fullName, pwd)) {
-   * Log.info("User doesn't exist or password is wrong");
-   * throw new WebApplicationException(Status.FORBIDDEN);
-   * }
-   * try {
-   * Message cur_message = hibernate.get(Message.class, mid);
-   * 
-   * if (cur_message.getCreationTime() + DELETE_MESSAGE_TIME <=
-   * System.currentTimeMillis()) {
-   * Log.
-   * info("It is not possible to delete the message now. It does not generate an error."
-   * );
-   * } else {
-   * Set<String> destinations = cur_message.getDestination();
-   * for (String des : destinations) {
-   * if (checkIfUserIsFromDomain(des)) {
-   * // Try to delete locally
-   * Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
-   * if (!res.isOK()) {
-   * Log.info("Failed to persist local message");
-   * throw new
-   * WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
-   * }
-   * }
-   * // Else do it assyncronously starting a thread
-   * else {
-   * propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
-   * }
-   * }
-   * }
-   * } catch (Exception e) {
-   * e.printStackTrace();
-   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-   * }
-   * }
-   */
-
   @Override
   public void deleteMessage(String name, String mid, String pwd) {
     // 1. Validação de parâmetros nulos
@@ -641,7 +638,7 @@ public class MessagesResource implements RestMessages {
     }
 
     // 2. Autenticação: Verificar se o utilizador existe e a password está correta
-    String fullName = name + "@" + this.domain;
+    String fullName = name.contains("@") ? name : name + "@" + this.domain;
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("Authentication failed for user: " + name);
       throw new WebApplicationException(Status.FORBIDDEN);
