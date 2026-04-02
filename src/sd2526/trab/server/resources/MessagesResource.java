@@ -459,7 +459,6 @@ public class MessagesResource implements RestMessages {
           // Guardar a notificação na BD
           hibernate.persist(failureNotice);
 
-          // Entregar DIRETAMENTE na caixa de entrada do Sender original
           UserInbox senderInbox = hibernate.get(UserInbox.class, sender_name);
           if (senderInbox == null) {
             senderInbox = new UserInbox(sender_name);
