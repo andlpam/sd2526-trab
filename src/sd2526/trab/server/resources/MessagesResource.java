@@ -10,7 +10,6 @@ import java.util.logging.Logger;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.*;
 import jakarta.validation.ConstraintViolationException;
-import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response.Status;
 import java.net.URI;
@@ -335,8 +334,11 @@ public class MessagesResource implements RestMessages {
 
         if (usrIn != null) {
           Message cur_message = usrIn.checkIfMessageInInbox(msg.getId());
-          if (cur_message != null)
-            removeFromUserInbox(getOnlyTheName(des), msg.getId(), pwd);
+          if (cur_message != null) {
+            usrIn.removeMessage(msg.getId());
+            hibernate.update(usrIn);
+          }
+          // removeFromUserInbox(getOnlyTheName(des), msg.getId(), pwd);
           // If the mailbox exists but there is no message there with that id it's ok also
 
         } // If it doesnt have a mailbox it is ok because the message doesnt exist
@@ -413,6 +415,7 @@ public class MessagesResource implements RestMessages {
       Log.info("Sender name pattern is wrong");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
+
     // LAST STEP: Send the message to the destinations
     // Message already sent by someone
     Set<String> destinations = msg.getDestination();
@@ -583,41 +586,113 @@ public class MessagesResource implements RestMessages {
     return inbox.getMessages(query);
   }
 
+  /*
+   * @Override
+   * public void deleteMessage(String name, String mid, String pwd) {
+   * 
+   * if (name == null || mid == null || pwd == null) {
+   * Log.info("Name or pwd or query are null");
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * String fullName = name + "@" + this.domain;
+   * if (!checkUserExistenceAndPassword(fullName, pwd)) {
+   * Log.info("User doesn't exist or password is wrong");
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * try {
+   * Message cur_message = hibernate.get(Message.class, mid);
+   * 
+   * if (cur_message.getCreationTime() + DELETE_MESSAGE_TIME <=
+   * System.currentTimeMillis()) {
+   * Log.
+   * info("It is not possible to delete the message now. It does not generate an error."
+   * );
+   * } else {
+   * Set<String> destinations = cur_message.getDestination();
+   * for (String des : destinations) {
+   * if (checkIfUserIsFromDomain(des)) {
+   * // Try to delete locally
+   * Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
+   * if (!res.isOK()) {
+   * Log.info("Failed to persist local message");
+   * throw new
+   * WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
+   * }
+   * }
+   * // Else do it assyncronously starting a thread
+   * else {
+   * propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+   * }
+   * }
+   * }
+   * } catch (Exception e) {
+   * e.printStackTrace();
+   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+   * }
+   * }
+   */
+
   @Override
   public void deleteMessage(String name, String mid, String pwd) {
-
+    // 1. Validação de parâmetros nulos
     if (name == null || mid == null || pwd == null) {
-      Log.info("Name or pwd or query are null");
+      Log.info("Invalid parameters for deleteMessage");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
+
+    // 2. Autenticação: Verificar se o utilizador existe e a password está correta
     String fullName = name + "@" + this.domain;
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
-      Log.info("User doesn't exist or password is wrong");
+      Log.info("Authentication failed for user: " + name);
       throw new WebApplicationException(Status.FORBIDDEN);
     }
+
     try {
+      // 3. Obter a mensagem da base de dados
       Message cur_message = hibernate.get(Message.class, mid);
 
-      if (cur_message.getCreationTime() + DELETE_MESSAGE_TIME <= System.currentTimeMillis()) {
-        Log.info("It is not possible to delete the message now. It does not generate an error.");
-      } else {
-        Set<String> destinations = cur_message.getDestination();
-        for (String des : destinations) {
-          if (checkIfUserIsFromDomain(des)) {
-            // Try to delete locally
-            Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
-            if (!res.isOK()) {
-              Log.info("Failed to persist local message");
-              throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
-            }
+      // Se a mensagem não existe, a Javadoc diz para não gerar erro
+      if (cur_message == null) {
+        Log.info("Message " + mid + " not found. Skipping deletion.");
+        return;
+      }
+
+      // 4. Autorização: Apenas o emissor original pode apagar a mensagem
+      // Usamos contains para evitar falhas de formatação/domínio
+      if (cur_message.getSender() == null || !cur_message.getSender().contains(name)) {
+        Log.info("Authorization failed: user " + name + " is not the sender.");
+        throw new WebApplicationException(Status.FORBIDDEN);
+      }
+
+      // 5. Regra dos 30 segundos: Verificar idade da mensagem
+      long messageAge = System.currentTimeMillis() - cur_message.getCreationTime();
+      if (messageAge > DELETE_MESSAGE_TIME) {
+        Log.info("Message is too old to be deleted: " + (messageAge / 1000) + "s");
+        // A especificação diz que só deve ser apagada se tiver menos de 30s.
+        // Se for mais velha, simplesmente ignoramos e retornamos sucesso (NO_CONTENT).
+        return;
+      }
+
+      // 6. Executar a remoção nas caixas de entrada (Inboxes)
+      Set<String> destinations = cur_message.getDestination();
+      for (String des : destinations) {
+        if (checkIfUserIsFromDomain(des)) {
+          // Remoção local direta na base de dados (através do UserInbox)
+          Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
+          if (!res.isOK()) {
+            Log.warning("Failed to delete local message reference for: " + des);
+            throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
           }
-          // Else do it assyncronously starting a thread
-          else {
-            propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
-          }
+        } else {
+          // Propagação para servidores remotos
+          propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
         }
       }
+
+    } catch (WebApplicationException w) {
+      throw w;
     } catch (Exception e) {
+      Log.severe("Unexpected error in deleteMessage: " + e.getMessage());
       e.printStackTrace();
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
     }

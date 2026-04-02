@@ -73,6 +73,11 @@ public class UsersResource implements RestUsers {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
+    if (!user.getDomain().equals(this.domain)) {
+      Log.info("User domain does not match server domain.");
+      throw new WebApplicationException(Status.FORBIDDEN);
+    }
+
     // Insert new user, checking if name already exists
     try {
       // Search the user in the data base

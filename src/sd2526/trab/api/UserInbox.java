@@ -8,7 +8,6 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import sd2526.trab.client.rest.RestUsersClient;
-import sd2526.trab.server.persistence.Hibernate;
 import java.util.logging.Logger;
 
 import jakarta.persistence.CascadeType;
