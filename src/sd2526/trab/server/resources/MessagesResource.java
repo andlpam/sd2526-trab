@@ -53,8 +53,10 @@ public class MessagesResource implements RestMessages {
 
   // Need to check if the sender is trustworthy
   // Need to verify if some person that receives this message is from this domain
-
+  // @pre adress needs to be of type adds@domain and not display name +
+  // <adds@domain>
   private String getDomain(String address) {
+    address = formatSenderNameFromMsg(address);
     return address.substring(address.lastIndexOf("@") + 1);
   }
 
@@ -73,15 +75,17 @@ public class MessagesResource implements RestMessages {
   }
 
   // It can have the display name so we need to remove it
-  private String formatSenderNameFromMsg(Message msg) {
+  private String formatSenderNameFromMsg(String sender) {
     String[] tmp = null;
-    String sender = msg.getSender();
     if (sender.contains(" ")) {
       tmp = sender.split(" ");
       sender = tmp[tmp.length - 1];
 
     }
-    return sender.substring(1, sender.length() - 1);
+    if (sender.contains("<"))
+      return sender.substring(1, sender.length() - 1);
+    else
+      return sender;
   }
 
   private boolean checkUserExistenceAndPassword(String name, String pwd) {
@@ -106,11 +110,6 @@ public class MessagesResource implements RestMessages {
     Log.info("Password is wrong or sender does not exist.");
     return false;
     // Assign the ID
-  }
-
-  private boolean checkIfMessageExist(Message msg, String userName) {
-    UserInbox usrInbox = hibernate.get(UserInbox.class, userName);
-    return usrInbox.checkIfMessageInInbox(msg);
   }
 
   private Message checkIfMessageExist(String msgId, String userName) {
@@ -180,8 +179,8 @@ public class MessagesResource implements RestMessages {
   }
 
   private void propagateMessage(String pwd, Message msg, String destination_address, boolean choice) {
-    String targetDomain = getDomain(destination_address); // Ex: "tecnico"
-    String sender = formatSenderNameFromMsg(msg); // Ex: "<nmp@fct>"
+
+    String sender = formatSenderNameFromMsg(msg.getSender()); // Ex: "<nmp@fct>"
     String originalId = msg.getId();
 
     // New Thread to return the ID right away
@@ -268,7 +267,7 @@ public class MessagesResource implements RestMessages {
       try {
         usrIn = hibernate.get(UserInbox.class, des);
         if (usrIn == null) {
-          String sender = formatSenderNameFromMsg(msg);
+          String sender = formatSenderNameFromMsg(msg.getSender());
           // If does not exist in the local server check the user server to see if it
           // exists
           RestUsersClient usersClient = getLocalUsersClient();
@@ -335,7 +334,8 @@ public class MessagesResource implements RestMessages {
         usrIn = hibernate.get(UserInbox.class, des);
 
         if (usrIn != null) {
-          if (usrIn.checkIfMessageInInbox(msg))
+          Message cur_message = usrIn.checkIfMessageInInbox(msg.getId());
+          if (cur_message != null)
             removeFromUserInbox(getOnlyTheName(des), msg.getId(), pwd);
           // If the mailbox exists but there is no message there with that id it's ok also
 
@@ -401,8 +401,13 @@ public class MessagesResource implements RestMessages {
 
       msg.setCreationTime(System.currentTimeMillis());
 
-    } // Message sent by other server case
-    else if (sender_name.matches(REGEX_FORWARDING) && msg.getId() != null) {
+    } // Duplicated message
+    else if (msg.getId() != null
+        && getDomain(sender_name).equals(this.domain)) {
+      Log.info("Message already exists.");
+      return msg.getId();
+      // Message sent by other server case
+    } else if (sender_name.matches(REGEX_FORWARDING) && msg.getId() != null) {
       // nothing to do here
     } else {
       Log.info("Sender name pattern is wrong");
@@ -519,7 +524,7 @@ public class MessagesResource implements RestMessages {
         Log.info("Message " + mid + " wasn't found in the box " + name);
         throw new WebApplicationException(Status.NOT_FOUND);
       }
-      inbox.removeMessage(msg);
+      inbox.removeMessage(mid);
       try {
         hibernate.update(inbox);
       } catch (Exception e) {
@@ -598,7 +603,18 @@ public class MessagesResource implements RestMessages {
       } else {
         Set<String> destinations = cur_message.getDestination();
         for (String des : destinations) {
-          propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+          if (checkIfUserIsFromDomain(des)) {
+            // Try to delete locally
+            Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
+            if (!res.isOK()) {
+              Log.info("Failed to persist local message");
+              throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
+            }
+          }
+          // Else do it assyncronously starting a thread
+          else {
+            propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+          }
         }
       }
     } catch (Exception e) {

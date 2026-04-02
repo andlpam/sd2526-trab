@@ -45,20 +45,20 @@ public class UserInbox {
     return this.messages;
   }
 
-  public boolean checkIfMessageInInbox(Message msg) {
-    return messages.contains(msg);
-  }
-
   public void addMessage(Message msg) {
     if (!messages.contains(msg))
       this.messages.add(msg);
   }
 
-  public void removeMessage(Message msg) {
-    if (messages.contains(msg))
-      this.messages.remove(msg);
-    else
+  public void removeMessage(String msgId) {
+    Message cur_message = checkIfMessageInInbox(msgId);
+    if (cur_message != null) {
+      this.messages.remove(cur_message);
+
+    } else {
       Log.info("The inbox doesn't contain the message that you want to remove");
+
+    }
   }
 
   public void clearAllMessages() {
