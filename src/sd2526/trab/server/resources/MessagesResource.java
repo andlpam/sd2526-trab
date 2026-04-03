@@ -20,7 +20,6 @@ import java.util.Set;
 import java.util.List;
 import java.util.HashSet;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import sd2526.trab.server.persistence.Hibernate;
@@ -67,7 +66,8 @@ public class MessagesResource implements RestMessages {
     String failureId = msg.getId() + "." + failedDestination;
     failureNotice.setId(failureId);
     // O sender do erro é o mesmo da mensagem original
-    failureNotice.setSender("<System>");
+    // failureNotice.setSender("<System>");
+    failureNotice.setSender(msg.getSender());
     failureNotice.setDestination(Collections.singleton(formatSenderNameFromMsg(msg.getSender())));
 
     // Formato EXATO do Subject que o Tester quer
@@ -244,7 +244,9 @@ public class MessagesResource implements RestMessages {
           if (choice == POSTMESSAGE) {
             result = msgClient.postMessage(pwd, msg);
           } else {
-            result = msgClient.deleteMessage(destination_address, msg.getId(), pwd);
+            // result = msgClient.deleteMessage(destination_address, msg.getId(), pwd);
+            String cleanSender = getOnlyTheName(sender) + "@" + getDomain(sender);
+            result = msgClient.deleteMessage(cleanSender, msg.getId(), pwd);
           }
 
           if (result.isOK()) {
@@ -274,7 +276,7 @@ public class MessagesResource implements RestMessages {
       }
 
       // Tratamento de Falha (Se não for do <System>)
-      if (!success && !sender.equals("<System>")) {
+      if (!success && /* !sender.equals("<System>") */ !msg.getId().contains(".")) {
         Log.info("Generating a failed notification to the remetent " + sender);
 
         Message notification = generateErrorMessage(destination_address, msg);
@@ -290,31 +292,120 @@ public class MessagesResource implements RestMessages {
     }).start();
   }
 
-  private Result<Void> assignMessageToUsers(String des, String pwd, Message msg) {
+  /*
+   * private Result<Void> assignMessageToUsers(String des, String pwd, Message
+   * msg) {
+   * try {
+   * UserInbox usrIn = hibernate.get(UserInbox.class, des);
+   * 
+   * if (usrIn == null) {
+   * // If the message came from the system then deliver the message
+   * if (msg.getId().contains(".")) {
+   * usrIn = new UserInbox(des);
+   * hibernate.persist(usrIn);
+   * } else {
+   * // Utilizador não tem Inbox. Vamos ver se ele existe no UsersServer
+   * Users usersClient = getLocalUsersClient();
+   * String senderForSearch = formatSenderNameFromMsg(msg.getSender());
+   * 
+   * Result<List<User>> user =
+   * usersClient.searchUsers(getOnlyTheName(senderForSearch), pwd,
+   * getOnlyTheName(des));
+   * if (user.isOK() && user.value() != null && !user.value().isEmpty()) {
+   * usrIn = new UserInbox(des);
+   * hibernate.persist(usrIn);
+   * } else {
+   * return Result.error(ErrorCode.NOT_FOUND);
+   * }
+   * }
+   * }
+   * 
+   * // Adiciona à inbox de forma segura (sem rebentar a BD)
+   * Message obtained_msg_inbox = usrIn.checkIfMessageInInbox(msg.getId());
+   * if (obtained_msg_inbox == null) {
+   * usrIn.addMessage(msg);
+   * hibernate.update(usrIn);
+   * }
+   * return Result.ok();
+   * 
+   * } catch (ConstraintViolationException e) {
+   * Log.info("User entry already exists in the inbox database");
+   * return Result.error(ErrorCode.CONFLICT);
+   * } catch (Exception e) {
+   * Log.severe("Error saving in the database " + e.getMessage());
+   * return Result.error(ErrorCode.INTERNAL_ERROR);
+   * }
+   * }
+   */
+
+  // Versão melhorada
+  private synchronized Result<Void> assignMessageToUsers(String des, String pwd, Message msg) {
     try {
       UserInbox usrIn = hibernate.get(UserInbox.class, des);
 
+      // Se a caixa não existir, temos de confirmar no UsersServer se o destinatário é
+      // válido
       if (usrIn == null) {
-        // If the message came from the system then deliver the message
-        if (msg.getSender().equals("<System>")) {
-          usrIn = new UserInbox(des);
-          hibernate.persist(usrIn);
-        } else {
-          // Utilizador não tem Inbox. Vamos ver se ele existe no UsersServer
-          Users usersClient = getLocalUsersClient();
-          String senderForSearch = formatSenderNameFromMsg(msg.getSender());
+        String senderRaw = formatSenderNameFromMsg(msg.getSender());
+        boolean isSystem = senderRaw.equals("<System>");
+        boolean isRemoteSender = !getDomain(senderRaw).equals(this.domain);
+        String targetName = getOnlyTheName(des);
 
-          Result<List<User>> user = usersClient.searchUsers(getOnlyTheName(senderForSearch), pwd, getOnlyTheName(des));
-          if (user.isOK() && user.value() != null && !user.value().isEmpty()) {
-            usrIn = new UserInbox(des);
-            hibernate.persist(usrIn);
-          } else {
-            return Result.error(ErrorCode.NOT_FOUND);
+        boolean targetExists = false;
+        Users usersClient = getLocalUsersClient();
+
+        if (isSystem || isRemoteSender) {
+          String ghostName = UUID.randomUUID().toString();
+          String ghostPwd = UUID.randomUUID().toString();
+
+          try {
+            // Criamos um utilizador fantasma
+            usersClient.postUser(new User(ghostName, ghostPwd, "Ghost", this.domain));
+
+            // Usamos o fantasma para pesquisar o destinatário da mensagem no server
+            Result<List<User>> searchRes = usersClient.searchUsers(ghostName, ghostPwd, targetName);
+
+            if (searchRes.isOK() && searchRes.value() != null) {
+              for (User u : searchRes.value()) {
+                if (u.getName().equals(targetName)) {
+                  targetExists = true;
+                  break;
+                }
+              }
+            }
+          } finally {
+            // No final apagamos o utilizador fantasma
+            try {
+              usersClient.deleteUser(ghostName, ghostPwd);
+            } catch (Exception ignored) {
+              Log.warning("Could not delete ghost user: " + ghostName);
+            }
+          }
+        } else {
+          // Se o remetente for local, temos a password dele e usamos diretamente:
+          Result<List<User>> userRes = usersClient.searchUsers(getOnlyTheName(senderRaw), pwd, targetName);
+          if (userRes.isOK() && userRes.value() != null) {
+            for (User u : userRes.value()) {
+              if (u.getName().equals(targetName)) {
+                targetExists = true;
+                break;
+              }
+            }
           }
         }
+
+        // Se após a pesquisa o utilizador não existir, devolvemos NOT_FOUND
+        // Isto faz o postMessage gerar a notificação de erro
+        if (!targetExists) {
+          return Result.error(ErrorCode.NOT_FOUND);
+        }
+
+        // O utilizador existe, criamos a inbox.
+        usrIn = new UserInbox(des);
+        hibernate.persist(usrIn);
       }
 
-      // Adiciona à inbox de forma segura (sem rebentar a BD)
+      // Adiciona a mensagem à inbox de forma segura
       Message obtained_msg_inbox = usrIn.checkIfMessageInInbox(msg.getId());
       if (obtained_msg_inbox == null) {
         usrIn.addMessage(msg);
@@ -346,7 +437,6 @@ public class MessagesResource implements RestMessages {
             usrIn.removeMessage(msg.getId());
             hibernate.update(usrIn);
           }
-          // removeFromUserInbox(getOnlyTheName(des), msg.getId(), pwd);
           // If the mailbox exists but there is no message there with that id it's ok also
 
         } // If it doesnt have a mailbox it is ok because the message doesnt exist
@@ -369,27 +459,126 @@ public class MessagesResource implements RestMessages {
     }
   }
 
+  /*
+   * @Override
+   * public String postMessage(String pwd, Message msg) {
+   * if (pwd == null || msg == null) {
+   * Log.info("Password or Message null");
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * Log.info("postMessage : pwd = " + pwd + "; msg = " + msg);
+   * 
+   * String sender_name = msg.getSender();
+   * if (sender_name == null) {
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * 
+   * // Password Validation
+   * if (!checkUserExistenceAndPassword(sender_name, pwd)) {
+   * Log.info("Password is incorrect or user does not exist.");
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * // Message Formatation
+   * if (msg.getId() == null && getDomain(sender_name).equals(this.domain)) {
+   * Users usersClient = getLocalUsersClient();
+   * Result<User> result = usersClient.getUser(getOnlyTheName(sender_name), pwd);
+   * 
+   * if (!result.isOK()) {
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * msg.setId(UUID.randomUUID().toString());
+   * msg.setSender(result.value().getDisplayName() + " <" + sender_name + ">");
+   * msg.setCreationTime(System.currentTimeMillis());
+   * } else if (msg.getId() == null) {
+   * throw new WebApplicationException(Status.BAD_REQUEST); // Se não for daqui,
+   * já devia ter ID!
+   * }
+   * 
+   * // Message Persistence
+   * try {
+   * if (hibernate.get(Message.class, msg.getId()) == null) {
+   * hibernate.persist(msg);
+   * } else {
+   * hibernate.update(msg);
+   * }
+   * } catch (Exception e) {
+   * Log.severe("Error persisting message: " + e.getMessage());
+   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+   * }
+   * 
+   * // Distribution to the destinations
+   * for (String destination : msg.getDestination()) {
+   * if (checkIfUserIsFromDomain(destination)) {
+   * 
+   * Result<Void> res = assignMessageToUsers(destination, pwd, msg);
+   * 
+   * // If it fails the local user does not exist, warn the Sender!
+   * if (!res.isOK() && res.error() == ErrorCode.NOT_FOUND) {
+   * Log.info("Failure Notification: " + destination + " not found.");
+   * Message failureNotice = generateErrorMessage(destination, msg);
+   * // Save the message locally
+   * try {
+   * hibernate.persist(failureNotice);
+   * } catch (ConstraintViolationException e) {
+   * e.printStackTrace();
+   * } catch (Exception x) {
+   * x.printStackTrace();
+   * }
+   * 
+   * String cleanSender = getOnlyTheName(sender_name) + "@" +
+   * getDomain(sender_name);
+   * 
+   * // If it is a <System> it is already an error
+   * if (!sender_name.equals("<System>")) {
+   * propagateMessage(pwd, failureNotice, cleanSender, POSTMESSAGE);
+   * }
+   * }
+   * } else {
+   * //
+   * propagateMessage(pwd, msg, destination, POSTMESSAGE);
+   * }
+   * }
+   * 
+   * return msg.getId();
+   * }
+   */
+
+  // Versão melhorada
   @Override
   public String postMessage(String pwd, Message msg) {
     if (pwd == null || msg == null) {
       Log.info("Password or Message null");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-    Log.info("postMessage : pwd = " + pwd + "; msg = " + msg);
 
     String sender_name = msg.getSender();
     if (sender_name == null) {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
-    // Password Validation
-    if (!checkUserExistenceAndPassword(sender_name, pwd)) {
-      Log.info("Password is incorrect or user does not exist.");
-      throw new WebApplicationException(Status.FORBIDDEN);
+    Log.info("postMessage : pwd = " + pwd + "; msg = " + msg);
+
+    boolean isNewMessage = (msg.getId() == null);
+    boolean isLocalSender = getDomain(sender_name).equals(this.domain);
+    boolean isBounceNotice = msg.getId() != null && msg.getId().contains(".");
+
+    // Se for uma mensagem do nosso domínio e não for um aviso de erro validamos a
+    // password
+    if (isLocalSender && !isBounceNotice) {
+      if (!checkUserExistenceAndPassword(sender_name, pwd)) {
+        Log.info("Password is incorrect or user does not exist.");
+        throw new WebApplicationException(Status.FORBIDDEN);
+      }
     }
 
-    // Message Formatation
-    if (msg.getId() == null && getDomain(sender_name).equals(this.domain)) {
+    // Se é uma mensagem nova
+    if (isNewMessage) {
+      if (!isLocalSender) {
+        throw new WebApplicationException(Status.BAD_REQUEST);
+      }
+
       Users usersClient = getLocalUsersClient();
       Result<User> result = usersClient.getUser(getOnlyTheName(sender_name), pwd);
 
@@ -400,11 +589,14 @@ public class MessagesResource implements RestMessages {
       msg.setId(UUID.randomUUID().toString());
       msg.setSender(result.value().getDisplayName() + " <" + sender_name + ">");
       msg.setCreationTime(System.currentTimeMillis());
-    } else if (msg.getId() == null) {
-      throw new WebApplicationException(Status.BAD_REQUEST); // Se não for daqui, já devia ter ID!
+
+      sender_name = msg.getSender();
+
+    } else if (!isNewMessage && isLocalSender && !msg.getId().contains(".")) {
+      // Se já tem ID, mas não é um aviso de erro
+      Log.info("Message already has ID but claims to be local. Skipping auth as it might be a bounce.");
     }
 
-    // Message Persistence
     try {
       if (hibernate.get(Message.class, msg.getId()) == null) {
         hibernate.persist(msg);
@@ -416,38 +608,58 @@ public class MessagesResource implements RestMessages {
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
     }
 
-    // Distribution to the destinations
-    for (String destination : msg.getDestination()) {
-      if (checkIfUserIsFromDomain(destination)) {
+    // Usamos o formato email@domain para fazer verificações
+    String rawSenderEmail = formatSenderNameFromMsg(sender_name);
+    boolean isOriginatingServer = getDomain(rawSenderEmail).equals(this.domain);
 
+    // Distribuição
+    Set<String> propagatedDomains = new HashSet<>();
+    // Lista para guardarmos os avisos de falha que temos de enviar de volta
+    List<Message> failureNoticesToPropagate = new ArrayList<>();
+
+    for (String destination : msg.getDestination()) {
+
+      // Se o destino for o nosso servidor local
+      if (checkIfUserIsFromDomain(destination)) {
         Result<Void> res = assignMessageToUsers(destination, pwd, msg);
 
-        // If it fails the local user does not exist, warn the Sender!
+        // Se falhar porque o utilizador local não existe, avisamos o remetente original
         if (!res.isOK() && res.error() == ErrorCode.NOT_FOUND) {
           Log.info("Failure Notification: " + destination + " not found.");
           Message failureNotice = generateErrorMessage(destination, msg);
-          // Save the message locally
+
           try {
-            hibernate.persist(failureNotice);
-          } catch (ConstraintViolationException e) {
-            e.printStackTrace();
-          } catch (Exception x) {
-            x.printStackTrace();
+            if (hibernate.get(Message.class, failureNotice.getId()) == null) {
+              hibernate.persist(failureNotice);
+            }
+          } catch (Exception e) {
+            Log.warning("Could not persist failure notice: " + e.getMessage());
           }
 
-          String cleanSender = getOnlyTheName(sender_name) + "@" + getDomain(sender_name);
-
-          // If it is a <System> it is already an error
-          if (!sender_name.equals("<System>")) {
-            propagateMessage(pwd, failureNotice, cleanSender, POSTMESSAGE);
+          // Se a mensagem original não for um erro
+          if (!msg.getId().contains(".")) {
+            // Em vez de mandarmos já pela rede e encravar o ciclo, pomos na lista
+            failureNoticesToPropagate.add(failureNotice);
           }
         }
-      } else {
-        //
-        propagateMessage(pwd, msg, destination, POSTMESSAGE);
+      }
+      // Se o destino for para outro domínio
+      else {
+        if (isOriginatingServer || msg.getId().contains(".")) {
+          String targetDomain = getDomain(destination);
+
+          if (!propagatedDomains.contains(targetDomain)) {
+            propagatedDomains.add(targetDomain);
+            propagateMessage(pwd, msg, destination, POSTMESSAGE);
+          }
+        }
       }
     }
 
+    // Enviar as notificações de falha geradas durante o ciclo
+    for (Message failureNotice : failureNoticesToPropagate) {
+      propagateMessage(pwd, failureNotice, rawSenderEmail, POSTMESSAGE);
+    }
     return msg.getId();
   }
 
@@ -601,67 +813,127 @@ public class MessagesResource implements RestMessages {
     return inbox.getMessages(query);
   }
 
+  /*
+   * @Override
+   * public void deleteMessage(String name, String mid, String pwd) {
+   * // 1. Validação de parâmetros nulos
+   * if (name == null || mid == null || pwd == null) {
+   * Log.info("Invalid parameters for deleteMessage");
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * 
+   * // 2. Autenticação: Verificar se o utilizador existe e a password está
+   * correta
+   * String fullName = name.contains("@") ? name : name + "@" + this.domain;
+   * if (!checkUserExistenceAndPassword(fullName, pwd)) {
+   * Log.info("Authentication failed for user: " + name);
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * try {
+   * 
+   * Message cur_message = hibernate.get(Message.class, mid);
+   * 
+   * if (cur_message == null) {
+   * Log.info("Message " + mid + " not found. Skipping deletion.");
+   * return;
+   * }
+   * 
+   * // Authentication
+   * if (cur_message.getSender() == null ||
+   * !cur_message.getSender().contains(name)) {
+   * Log.info("Authorization failed: user " + name + " is not the sender.");
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * // Rule of 30 seconds to delete
+   * long messageAge = System.currentTimeMillis() - cur_message.getCreationTime();
+   * if (messageAge > DELETE_MESSAGE_TIME) {
+   * Log.info("Message is too old to be deleted: " + (messageAge / 1000) + "s");
+   * // A especificação diz que só deve ser apagada se tiver menos de 30s.
+   * // Se for mais velha, simplesmente ignoramos e retornamos sucesso
+   * (NO_CONTENT).
+   * return;
+   * }
+   * 
+   * // Remove inboxes
+   * Set<String> destinations = cur_message.getDestination();
+   * for (String des : destinations) {
+   * if (checkIfUserIsFromDomain(des)) {
+   * // Remoção local direta na base de dados (através do UserInbox)
+   * Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
+   * if (!res.isOK()) {
+   * Log.warning("Failed to delete local message reference for: " + des);
+   * throw new
+   * WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
+   * }
+   * } else {
+   * 
+   * propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+   * }
+   * }
+   * 
+   * } catch (WebApplicationException w) {
+   * throw w;
+   * } catch (Exception e) {
+   * Log.severe("Unexpected error in deleteMessage: " + e.getMessage());
+   * e.printStackTrace();
+   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+   * }
+   * }
+   */
+
+  // Versão melhorada
   @Override
   public void deleteMessage(String name, String mid, String pwd) {
-    // 1. Validação de parâmetros nulos
     if (name == null || mid == null || pwd == null) {
-      Log.info("Invalid parameters for deleteMessage");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
-    // 2. Autenticação: Verificar se o utilizador existe e a password está correta
+    Message msg = hibernate.get(Message.class, mid);
+    if (msg == null)
+      return;
+
+    String rawSender = formatSenderNameFromMsg(msg.getSender());
+    boolean isOriginatingServer = getDomain(rawSender).equals(this.domain);
     String fullName = name.contains("@") ? name : name + "@" + this.domain;
-    if (!checkUserExistenceAndPassword(fullName, pwd)) {
-      Log.info("Authentication failed for user: " + name);
-      throw new WebApplicationException(Status.FORBIDDEN);
-    }
 
-    try {
-
-      Message cur_message = hibernate.get(Message.class, mid);
-
-      if (cur_message == null) {
-        Log.info("Message " + mid + " not found. Skipping deletion.");
-        return;
-      }
-
-      // Authentication
-      if (cur_message.getSender() == null || !cur_message.getSender().contains(name)) {
-        Log.info("Authorization failed: user " + name + " is not the sender.");
+    if (isOriginatingServer) {
+      // É uma mensagem do nosso domínio, temos de validar a password
+      if (!checkUserExistenceAndPassword(fullName, pwd)) {
         throw new WebApplicationException(Status.FORBIDDEN);
       }
-
-      // Rule of 30 seconds to delete
-      long messageAge = System.currentTimeMillis() - cur_message.getCreationTime();
-      if (messageAge > DELETE_MESSAGE_TIME) {
-        Log.info("Message is too old to be deleted: " + (messageAge / 1000) + "s");
-        // A especificação diz que só deve ser apagada se tiver menos de 30s.
-        // Se for mais velha, simplesmente ignoramos e retornamos sucesso (NO_CONTENT).
-        return;
+      // Só o remetente pode apagar
+      if (!rawSender.equals(fullName)) {
+        throw new WebApplicationException(Status.FORBIDDEN);
       }
+    } else {
+      // Confiamos no servidor de origem e saltamos o check da password.
+      // Mas confirmamos que o pedido vem em nome do verdadeiro remetente
+      if (!rawSender.equals(fullName)) {
+        throw new WebApplicationException(Status.FORBIDDEN);
+      }
+    }
 
-      // Remove inboxes
-      Set<String> destinations = cur_message.getDestination();
-      for (String des : destinations) {
-        if (checkIfUserIsFromDomain(des)) {
-          // Remoção local direta na base de dados (através do UserInbox)
-          Result<Void> res = deleteMessageFromUsers(des, pwd, cur_message);
-          if (!res.isOK()) {
-            Log.warning("Failed to delete local message reference for: " + des);
-            throw new WebApplicationException(GatewayResource.getStatusFromErrorCode(res.error()));
-          }
-        } else {
-
-          propagateMessage(pwd, cur_message, des, DELETEMESSAGE);
+    // Remover das caixas locais e propagar
+    for (String destination : msg.getDestination()) {
+      if (checkIfUserIsFromDomain(destination)) {
+        UserInbox inbox = hibernate.get(UserInbox.class, destination);
+        if (inbox != null) {
+          inbox.removeMessage(mid);
+          hibernate.update(inbox);
         }
+      } else if (isOriginatingServer) {
+        // Só propagamos a eliminação para a rede se nós formos a origem
+        propagateMessage(pwd, msg, destination, DELETEMESSAGE);
       }
+    }
 
-    } catch (WebApplicationException w) {
-      throw w;
+    // Remover a mensagem principal da BD
+    try {
+      hibernate.delete(msg);
     } catch (Exception e) {
-      Log.severe("Unexpected error in deleteMessage: " + e.getMessage());
-      e.printStackTrace();
-      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+      Log.warning("Message already deleted or error: " + e.getMessage());
     }
   }
 
