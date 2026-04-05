@@ -32,6 +32,7 @@ public class MessagesResource implements RestMessages {
   private static final long DELETE_MESSAGE_TIME = 30000;
   private static final boolean POSTMESSAGE = true;
   private static final boolean DELETEMESSAGE = false;
+  private static final int MAX_RETRIES = 5;
 
   // Can only contain one @
   private static final String REGEX_LOCAL = "^[^@<>\\s]+@[^@<>\\s]+$";
@@ -44,12 +45,19 @@ public class MessagesResource implements RestMessages {
 
   private final Hibernate hibernate;
 
+  private final String botName;
+  private final String botPwd;
+  private volatile boolean botCreated = false;
+
   public MessagesResource(String serviceName, String domain, Discovery discovery) {
     this.d = discovery;
     this.domain = domain;
     this.serviceName = serviceName;
     hibernate = Hibernate.getInstance();
     this.externalClients = new ConcurrentHashMap<>();
+
+    this.botName = "sysbot_" + UUID.randomUUID().toString();
+    this.botPwd = UUID.randomUUID().toString();
   }
 
   // Need to check if the sender is trustworthy
@@ -111,34 +119,80 @@ public class MessagesResource implements RestMessages {
       return sender;
   }
 
+  /*
+   * private boolean checkUserExistenceAndPassword(String name, String pwd) {
+   * if (name == null) {
+   * Log.info("Sender Name is none");
+   * return false;
+   * // Message needs to be sent by this server case
+   * } else if (name.equals("<System>")) {
+   * return true;
+   * } else if (name.matches(REGEX_LOCAL) && getDomain(name).equals(this.domain))
+   * {
+   * 
+   * // Talk to the server to find the user object of the sender from this domain
+   * Users usersClient = getLocalUsersClient();
+   * Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
+   * 
+   * // If the user is not created yet create the user
+   * 
+   * // Check if the sender exists in the users server
+   * if (result.isOK()) {
+   * Log.info("Found " + result.value().getName());
+   * return true;
+   * }
+   * // The receiving server of the message so we dont need to verify neither the
+   * // password nor the user
+   * } else if (name.matches(REGEX_FORWARDING) &&
+   * !getDomain(name).equals(this.domain)) {
+   * return true;
+   * }
+   * Log.info("Password is wrong or sender does not exist.");
+   * return false;
+   * // Assign the ID
+   * }
+   */
+
   private boolean checkUserExistenceAndPassword(String name, String pwd) {
     if (name == null) {
       Log.info("Sender Name is none");
       return false;
-      // Message needs to be sent by this server case
     } else if (name.equals("<System>")) {
       return true;
     } else if (name.matches(REGEX_LOCAL) && getDomain(name).equals(this.domain)) {
 
-      // Talk to the server to find the user object of the sender from this domain
       Users usersClient = getLocalUsersClient();
-      Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
 
-      // If the user is not created yet create the user
+      // Tenta até 5 vezes se a rede estiver saturada
+      for (int i = 0; i < MAX_RETRIES; i++) {
+        try {
+          Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
 
-      // Check if the sender exists in the users server
-      if (result.isOK()) {
-        Log.info("Found " + result.value().getName());
-        return true;
+          if (result.isOK() && result.value() != null) {
+            Log.info("Found " + result.value().getName());
+            return true;
+          }
+
+          Log.info("Password is wrong or sender does not exist.");
+          return false;
+
+        } catch (Exception e) {
+          Log.warning("Connection refused ao UsersServer. A tentar de novo...");
+          try {
+            Thread.sleep(200);
+          } catch (InterruptedException ignored) {
+          }
+        }
       }
-      // The receiving server of the message so we dont need to verify neither the
-      // password nor the user
+
+      throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
+
     } else if (name.matches(REGEX_FORWARDING) && !getDomain(name).equals(this.domain)) {
       return true;
     }
+
     Log.info("Password is wrong or sender does not exist.");
     return false;
-    // Assign the ID
   }
 
   private Message checkIfMessageExist(String msgId, String userName) {
@@ -862,8 +916,6 @@ public class MessagesResource implements RestMessages {
     return messageIds;
   }
 
-  // 1.First we need to check if the user is the user exists in the server
-  // 2.Second we need to go to the user inbox and just remove it
   @Override
   public void removeFromUserInbox(String name, String mid, String pwd) {
 
@@ -872,7 +924,9 @@ public class MessagesResource implements RestMessages {
       Log.info("Params can be null.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
+
     String fullName = name.contains("@") ? name : name + "@" + this.domain;
+
     // Check if the password is right and the user exists
     if (!checkUserExistenceAndPassword(fullName, pwd)) {
       Log.info("User doesn't exist or password is wrong");
@@ -883,9 +937,9 @@ public class MessagesResource implements RestMessages {
       // Get the inBox of the user
       UserInbox inbox = hibernate.get(UserInbox.class, fullName);
 
-      // If the inBox doesn't exist, the message isn't there
+      // If the inBox doesn't exist, or is empty, the message isn't there
       if (inbox == null || inbox.getMessages().isEmpty()) {
-        Log.info("The mail box is Empty");
+        Log.info("The mail box is Empty or doesn't exist");
         throw new WebApplicationException(Status.NOT_FOUND);
       }
 
@@ -894,21 +948,18 @@ public class MessagesResource implements RestMessages {
         Log.info("Message " + mid + " wasn't found in the box " + name);
         throw new WebApplicationException(Status.NOT_FOUND);
       }
-      inbox.removeMessage(mid);
-      try {
-        hibernate.update(inbox);
-      } catch (Exception e) {
-        Log.info("Database couldn't update");
-        throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-      }
 
+      inbox.removeMessage(mid);
+
+      hibernate.update(inbox);
       Log.info("Message " + mid + " removed with success!");
 
+    } catch (WebApplicationException w) {
+      throw w;
     } catch (Exception e) {
       Log.info("Internal error in the data base with the message " + e.getMessage());
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
     }
-
   }
 
   @Override
@@ -948,6 +999,10 @@ public class MessagesResource implements RestMessages {
     } catch (Exception e) {
       Log.severe("Error on accessing the data base: " + e.getMessage());
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+    }
+
+    if (inbox == null) {
+      return new ArrayList<>();
     }
 
     return inbox.getMessages(query);
