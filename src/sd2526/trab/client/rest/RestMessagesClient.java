@@ -19,7 +19,6 @@ import sd2526.trab.api.*;
 import sd2526.trab.api.java.*;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.api.rest.RestMessages;
-import sd2526.trab.api.rest.RestUsers;
 
 public class RestMessagesClient implements Messages {
   private static Logger Log = Logger.getLogger(RestUsersClient.class.getName());
