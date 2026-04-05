@@ -1,6 +1,7 @@
 package sd2526.trab.server.resources;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.net.URI;
 import java.util.logging.Logger;
 import org.hibernate.exception.ConstraintViolationException;
@@ -62,58 +63,99 @@ public class UsersResource implements RestUsers {
   }
 
   // I am not sure if I need to use syncronize here or not in all these methods
+  /*
+   * @Override
+   * public String postUser(User user) {
+   * // Log.info("postUser : " + user);
+   * 
+   * // Check if user data is valid
+   * if (user.getName() == null || user.getPwd() == null || user.getDisplayName()
+   * == null
+   * || user.getDomain() == null) {
+   * Log.info("User object invalid.");
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * 
+   * if (!user.getDomain().equals(this.domain)) {
+   * Log.info("User domain does not match server domain.");
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * // Insert new user, checking if name already exists
+   * try {
+   * // Search the user in the data base
+   * User existingUser = hibernate.get(User.class, user.getName());
+   * 
+   * if (existingUser != null) {
+   * // Verifies if the data are exactly the same
+   * if (existingUser.getPwd().equals(user.getPwd()) &&
+   * existingUser.getDisplayName().equals(user.getDisplayName()) &&
+   * existingUser.getDomain().equals(user.getDomain())) {
+   * 
+   * Log.info("User with the exact same data.");
+   * return user.getName() + "@" + user.getDomain();
+   * } else {
+   * // CONFLICT
+   * Log.info("User already exists.");
+   * throw new WebApplicationException(Status.CONFLICT);
+   * }
+   * }
+   * 
+   * } catch (ConstraintViolationException e) {
+   * e.printStackTrace();
+   * Log.info("User already exists");
+   * 
+   * } catch (Exception x) {
+   * x.printStackTrace();
+   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+   * }
+   * // If the user doesn't exist
+   * hibernate.persist(user);
+   * return user.getName() + "@" + user.getDomain();
+   * }
+   */
+
   @Override
   public String postUser(User user) {
-    Log.info("postUser : " + user);
-
-    // Check if user data is valid
     if (user.getName() == null || user.getPwd() == null || user.getDisplayName() == null
         || user.getDomain() == null) {
-      Log.info("User object invalid.");
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
     if (!user.getDomain().equals(this.domain)) {
-      Log.info("User domain does not match server domain.");
       throw new WebApplicationException(Status.FORBIDDEN);
     }
 
-    // Insert new user, checking if name already exists
     try {
-      // Search the user in the data base
       User existingUser = hibernate.get(User.class, user.getName());
 
       if (existingUser != null) {
-        // Verifies if the data are exactly the same
         if (existingUser.getPwd().equals(user.getPwd()) &&
             existingUser.getDisplayName().equals(user.getDisplayName()) &&
             existingUser.getDomain().equals(user.getDomain())) {
-
-          Log.info("User with the exact same data.");
           return user.getName() + "@" + user.getDomain();
         } else {
-          // CONFLICT
-          Log.info("User already exists.");
           throw new WebApplicationException(Status.CONFLICT);
         }
       }
 
-    } catch (ConstraintViolationException e) {
-      e.printStackTrace();
-      Log.info("User already exists");
+      hibernate.persist(user);
+      return user.getName() + "@" + user.getDomain();
 
+    } catch (WebApplicationException w) {
+      throw w;
+    } catch (ConstraintViolationException e) {
+      Log.info("User already exists");
+      throw new WebApplicationException(Status.CONFLICT);
     } catch (Exception x) {
       x.printStackTrace();
-      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+      throw new WebApplicationException(Status.CONFLICT);
     }
-    // If the user doesn't exist
-    hibernate.persist(user);
-    return user.getName() + "@" + user.getDomain();
   }
 
   @Override
   public User getUser(String name, String pwd) {
-    Log.info("getUser : name = " + name + "; pwd = " + pwd);
+    // Log.info("getUser : name = " + name + "; pwd = " + pwd);
 
     // Check if parameters are valid
     if (name == null || pwd == null) {
@@ -142,6 +184,9 @@ public class UsersResource implements RestUsers {
   // Only update the user or create the user when he sends or receives a message
   @Override
   public User updateUser(String name, String pwd, User info) {
+    // Log.info("updateUser : name = " + name + "; pwd = " + pwd + " ; info = " +
+    // info);
+
     // Check if parameters are valid
     if (name == null || pwd == null || info == null) {
       Log.info("Name or password or info are null.");
@@ -151,8 +196,6 @@ public class UsersResource implements RestUsers {
     if (info.getName() != null && !info.getName().equals(name)) {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
-
-    Log.info("updateUser : name = " + name + "; pwd = " + pwd + " ; info = " + info);
 
     User user = null;
     try {
@@ -183,12 +226,11 @@ public class UsersResource implements RestUsers {
   // This method must be asyncronous and calls imediatly the server of the user
   @Override
   public User deleteUser(String name, String pwd) {
-
+    // Log.info("deleteUser : name = " + name + "; pwd = " + pwd);
     if (name == null || pwd == null) {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
-    Log.info("deleteUser : name = " + name + "; pwd = " + pwd);
     // Search User
     User user;
     try {
@@ -223,40 +265,79 @@ public class UsersResource implements RestUsers {
     return user;
   }
 
+  /*
+   * @Override
+   * public List<User> searchUsers(String name, String pwd, String pattern) {
+   * // Log.info("searchUsers : name = " + name + "; pwd = " + pwd +
+   * "; pattern = " +
+   * // pattern);
+   * 
+   * if (name == null || pwd == null) {
+   * throw new WebApplicationException(Status.BAD_REQUEST);
+   * }
+   * 
+   * try {
+   * // Get the user from the database
+   * User caller = hibernate.get(User.class, name);
+   * if (caller == null || !caller.getPwd().equals(pwd)) {
+   * // If the user doesn't exist or the pwd is wrong
+   * throw new WebApplicationException(Status.FORBIDDEN);
+   * }
+   * 
+   * // Create the query
+   * String query = "SELECT u FROM User u";
+   * if (pattern != null && !pattern.isEmpty()) {
+   * String p = pattern.toLowerCase();
+   * 
+   * query += " WHERE LOWER(u.name) LIKE '%" + p +
+   * "%' OR LOWER(u.displayName) LIKE '%" + p + "%'";
+   * }
+   * 
+   * List<User> hits = hibernate.jpql(query, User.class);
+   * 
+   * // Clean the passwords
+   * for (User u : hits) {
+   * u.setPwd("");
+   * }
+   * 
+   * // Return the list with the clean passwords
+   * return hits;
+   * 
+   * } catch (WebApplicationException w) {
+   * throw w;
+   * } catch (Exception x) {
+   * x.printStackTrace();
+   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
+   * }
+   * }
+   */
+
   @Override
   public List<User> searchUsers(String name, String pwd, String pattern) {
-
     if (name == null || pwd == null) {
       throw new WebApplicationException(Status.BAD_REQUEST);
     }
 
-    Log.info("searchUsers : name = " + name + "; pwd = " + pwd + "; pattern = " + pattern);
-
     try {
-      // Get the user from the database
       User caller = hibernate.get(User.class, name);
       if (caller == null || !caller.getPwd().equals(pwd)) {
-        // If the user doesn't exist or the pwd is wrong
         throw new WebApplicationException(Status.FORBIDDEN);
       }
 
-      // Create the query
       String query = "SELECT u FROM User u";
       if (pattern != null && !pattern.isEmpty()) {
         String p = pattern.toLowerCase();
-
-        query += " WHERE LOWER(u.name) LIKE '%" + p + "%' OR LOWER(u.displayName) LIKE '%" + p + "%'";
+        query += " WHERE LOWER(u.name) LIKE '%" + p + "%'";
       }
 
       List<User> hits = hibernate.jpql(query, User.class);
 
-      // Clean the passwords
+      List<User> cleanHits = new ArrayList<>();
       for (User u : hits) {
-        u.setPwd("");
+        cleanHits.add(new User(u.getName(), "", u.getDisplayName(), u.getDomain()));
       }
 
-      // Return the list with the clean passwords
-      return hits;
+      return cleanHits;
 
     } catch (WebApplicationException w) {
       throw w;
