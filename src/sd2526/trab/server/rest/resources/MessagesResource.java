@@ -1,4 +1,4 @@
-package sd2526.trab.server.resources;
+package sd2526.trab.server.rest.resources;
 
 import sd2526.trab.client.rest.RestGatewayClient;
 import sd2526.trab.client.rest.RestMessagesClient;
@@ -234,10 +234,10 @@ public class MessagesResource implements RestMessages {
     String sender = formatSenderNameFromMsg(msg.getSender());
     String cleanSender = getOnlyTheName(sender) + "@" + getDomain(sender);
 
-    Map<String, List<String>> domainsMap = new java.util.HashMap<>();
+    Map<String, List<String>> domainsMap = new ConcurrentHashMap();
     for (String dest : destinations) {
       String targetDomain = getDomain(dest);
-      domainsMap.computeIfAbsent(targetDomain, k -> new java.util.ArrayList<>()).add(dest);
+      domainsMap.computeIfAbsent(targetDomain, k -> new ArrayList<>()).add(dest);
     }
 
     for (Map.Entry<String, List<String>> entry : domainsMap.entrySet()) {

@@ -1,4 +1,4 @@
-package sd2526.trab.server;
+package sd2526.trab.server.rest;
 
 import java.net.InetAddress;
 import java.net.URI;
@@ -7,21 +7,21 @@ import java.util.logging.Logger;
 import org.glassfish.jersey.jdkhttp.JdkHttpServerFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 
-import sd2526.trab.server.resources.UsersResource;
 import sd2526.trab.discovery.Discovery;
+import sd2526.trab.server.rest.resources.GatewayResource;
 
-public class UsersServer {
+public class GatewayServerRest {
 
-  private static Logger Log = Logger.getLogger(UsersServer.class.getName());
+  private static Logger Log = Logger.getLogger(GatewayServerRest.class.getName());
+  public static final int PORT = 8080;
+  public static final String SERVICE_NAME = "Gateway";
+  private static final String SERVER_URI_FMT = "http://%s:%s/rest";
 
+  // Oficial rules for using Jersey
   static {
     System.setProperty("java.net.preferIPv4Stack", "true");
     System.setProperty("java.util.logging.SimpleFormatter.format", "%4$s: %5$s\n");
   }
-
-  public static final int PORT = 8080;
-  public static final String SERVICE_NAME = "Users";
-  private static final String SERVER_URI_FMT = "http://%s:%s/rest";
 
   public static void main(String[] args) {
     try {
@@ -42,14 +42,14 @@ public class UsersServer {
       Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..
-      UsersResource res = new UsersResource(discovery, domain);
+      GatewayResource res = new GatewayResource(SERVICE_NAME, domain, discovery);
       config.register(res);
       // Load the server
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
       Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
     } catch (Exception e) {
       Log.severe(e.getMessage());
-      e.printStackTrace();
     }
   }
+
 }

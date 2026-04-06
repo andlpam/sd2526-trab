@@ -1,4 +1,4 @@
-package sd2526.trab.server;
+package sd2526.trab.server.rest;
 
 import java.net.InetAddress;
 import java.net.URI;
@@ -8,13 +8,13 @@ import org.glassfish.jersey.jdkhttp.JdkHttpServerFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 
 import sd2526.trab.discovery.Discovery;
-import sd2526.trab.server.resources.GatewayResource;
+import sd2526.trab.server.rest.resources.MessagesResource;
 
-public class GatewayServer {
+public class MessagesServerRest {
 
-  private static Logger Log = Logger.getLogger(GatewayServer.class.getName());
+  private static Logger Log = Logger.getLogger(MessagesServerRest.class.getName());
   public static final int PORT = 8080;
-  public static final String SERVICE_NAME = "Gateway";
+  public static final String SERVICE_NAME = "Messages";
   private static final String SERVER_URI_FMT = "http://%s:%s/rest";
 
   // Oficial rules for using Jersey
@@ -24,8 +24,8 @@ public class GatewayServer {
   }
 
   public static void main(String[] args) {
-    try {
 
+    try {
       ResourceConfig config = new ResourceConfig();
 
       // can be messages.fct, messages.fcsh etc..
@@ -39,17 +39,20 @@ public class GatewayServer {
       String serverURI = String.format(SERVER_URI_FMT, ip, PORT);
 
       // Create the discovery and start the threads
+
       Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..
-      GatewayResource res = new GatewayResource(SERVICE_NAME, domain, discovery);
+      MessagesResource res = new MessagesResource(SERVICE_NAME, domain, discovery);
       config.register(res);
       // Load the server
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
       Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
+
     } catch (Exception e) {
       Log.severe(e.getMessage());
     }
+
   }
 
 }

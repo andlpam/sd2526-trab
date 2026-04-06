@@ -1,4 +1,4 @@
-package sd2526.trab.server.resources;
+package sd2526.trab.server.rest.resources;
 
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;

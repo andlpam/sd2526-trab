@@ -1,4 +1,4 @@
-package sd2526.trab.server;
+package sd2526.trab.server.rest;
 
 import java.net.InetAddress;
 import java.net.URI;
@@ -8,24 +8,24 @@ import org.glassfish.jersey.jdkhttp.JdkHttpServerFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 
 import sd2526.trab.discovery.Discovery;
-import sd2526.trab.server.resources.MessagesResource;
+import sd2526.trab.server.rest.resources.UsersResource;
 
-public class MessagesServer {
+public class UsersServerRest {
 
-  private static Logger Log = Logger.getLogger(MessagesServer.class.getName());
-  public static final int PORT = 8080;
-  public static final String SERVICE_NAME = "Messages";
-  private static final String SERVER_URI_FMT = "http://%s:%s/rest";
+  private static Logger Log = Logger.getLogger(UsersServerRest.class.getName());
 
-  // Oficial rules for using Jersey
   static {
     System.setProperty("java.net.preferIPv4Stack", "true");
     System.setProperty("java.util.logging.SimpleFormatter.format", "%4$s: %5$s\n");
   }
 
-  public static void main(String[] args) {
+  public static final int PORT = 8080;
+  public static final String SERVICE_NAME = "Users";
+  private static final String SERVER_URI_FMT = "http://%s:%s/rest";
 
+  public static void main(String[] args) {
     try {
+
       ResourceConfig config = new ResourceConfig();
 
       // can be messages.fct, messages.fcsh etc..
@@ -39,20 +39,17 @@ public class MessagesServer {
       String serverURI = String.format(SERVER_URI_FMT, ip, PORT);
 
       // Create the discovery and start the threads
-
       Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
       // Server resource need the discovery mechanism..
-      MessagesResource res = new MessagesResource(SERVICE_NAME, domain, discovery);
+      UsersResource res = new UsersResource(domain);
       config.register(res);
       // Load the server
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
       Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
-
     } catch (Exception e) {
       Log.severe(e.getMessage());
+      e.printStackTrace();
     }
-
   }
-
 }

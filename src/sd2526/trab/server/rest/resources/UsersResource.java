@@ -1,4 +1,4 @@
-package sd2526.trab.server.resources;
+package sd2526.trab.server.rest.resources;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -19,47 +19,15 @@ import sd2526.trab.api.java.*;
 public class UsersResource implements RestUsers {
 
   private final Hibernate hibernate;
-  private final Discovery d;
   private final String domain;
 
   private static Logger Log = Logger.getLogger(UsersResource.class.getName());
 
   private RestMessagesClient localMessageClient = null;
 
-  public UsersResource(Discovery discovery, String domain) {
+  public UsersResource(String domain) {
     hibernate = Hibernate.getInstance();
-    this.d = discovery;
     this.domain = domain;
-  }
-
-  private synchronized RestMessagesClient getLocalMessageClient() {
-    if (localMessageClient != null) {
-      return localMessageClient;
-    }
-
-    // First time searching for users client
-    String serviceName = "Messages";
-    try {
-      Result<URI[]> uris = d.knownUrisOf(serviceName, this.domain, 1);
-
-      if (!uris.isOK()) {
-        // This might be wrong, fix later
-        // Timeout if server not being able to answer 5 seconds later
-        Log.info("Server is not being able to delivering uris by multicast.");
-        throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
-      }
-
-      localMessageClient = new RestMessagesClient(uris.value()[0]);
-      return localMessageClient;
-
-    } catch (WebApplicationException w) {
-      throw w;
-    } catch (Exception e) {
-      // Unexpected error
-      Log.severe("Erro inesperado a criar o MessageClient: " + e.getMessage());
-      throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-    }
-
   }
 
   @Override
