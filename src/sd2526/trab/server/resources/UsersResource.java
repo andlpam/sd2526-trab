@@ -62,59 +62,6 @@ public class UsersResource implements RestUsers {
 
   }
 
-  // I am not sure if I need to use syncronize here or not in all these methods
-  /*
-   * @Override
-   * public String postUser(User user) {
-   * // Log.info("postUser : " + user);
-   * 
-   * // Check if user data is valid
-   * if (user.getName() == null || user.getPwd() == null || user.getDisplayName()
-   * == null
-   * || user.getDomain() == null) {
-   * Log.info("User object invalid.");
-   * throw new WebApplicationException(Status.BAD_REQUEST);
-   * }
-   * 
-   * if (!user.getDomain().equals(this.domain)) {
-   * Log.info("User domain does not match server domain.");
-   * throw new WebApplicationException(Status.FORBIDDEN);
-   * }
-   * 
-   * // Insert new user, checking if name already exists
-   * try {
-   * // Search the user in the data base
-   * User existingUser = hibernate.get(User.class, user.getName());
-   * 
-   * if (existingUser != null) {
-   * // Verifies if the data are exactly the same
-   * if (existingUser.getPwd().equals(user.getPwd()) &&
-   * existingUser.getDisplayName().equals(user.getDisplayName()) &&
-   * existingUser.getDomain().equals(user.getDomain())) {
-   * 
-   * Log.info("User with the exact same data.");
-   * return user.getName() + "@" + user.getDomain();
-   * } else {
-   * // CONFLICT
-   * Log.info("User already exists.");
-   * throw new WebApplicationException(Status.CONFLICT);
-   * }
-   * }
-   * 
-   * } catch (ConstraintViolationException e) {
-   * e.printStackTrace();
-   * Log.info("User already exists");
-   * 
-   * } catch (Exception x) {
-   * x.printStackTrace();
-   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-   * }
-   * // If the user doesn't exist
-   * hibernate.persist(user);
-   * return user.getName() + "@" + user.getDomain();
-   * }
-   */
-
   @Override
   public String postUser(User user) {
     if (user.getName() == null || user.getPwd() == null || user.getDisplayName() == null
@@ -264,53 +211,6 @@ public class UsersResource implements RestUsers {
 
     return user;
   }
-
-  /*
-   * @Override
-   * public List<User> searchUsers(String name, String pwd, String pattern) {
-   * // Log.info("searchUsers : name = " + name + "; pwd = " + pwd +
-   * "; pattern = " +
-   * // pattern);
-   * 
-   * if (name == null || pwd == null) {
-   * throw new WebApplicationException(Status.BAD_REQUEST);
-   * }
-   * 
-   * try {
-   * // Get the user from the database
-   * User caller = hibernate.get(User.class, name);
-   * if (caller == null || !caller.getPwd().equals(pwd)) {
-   * // If the user doesn't exist or the pwd is wrong
-   * throw new WebApplicationException(Status.FORBIDDEN);
-   * }
-   * 
-   * // Create the query
-   * String query = "SELECT u FROM User u";
-   * if (pattern != null && !pattern.isEmpty()) {
-   * String p = pattern.toLowerCase();
-   * 
-   * query += " WHERE LOWER(u.name) LIKE '%" + p +
-   * "%' OR LOWER(u.displayName) LIKE '%" + p + "%'";
-   * }
-   * 
-   * List<User> hits = hibernate.jpql(query, User.class);
-   * 
-   * // Clean the passwords
-   * for (User u : hits) {
-   * u.setPwd("");
-   * }
-   * 
-   * // Return the list with the clean passwords
-   * return hits;
-   * 
-   * } catch (WebApplicationException w) {
-   * throw w;
-   * } catch (Exception x) {
-   * x.printStackTrace();
-   * throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
-   * }
-   * }
-   */
 
   @Override
   public List<User> searchUsers(String name, String pwd, String pattern) {
