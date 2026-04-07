@@ -2,6 +2,8 @@ package sd2526.trab.server.rest.resources;
 
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
+import sd2526.trab.client.grpc.GrpcUsersClient;
+import sd2526.trab.client.grpc.GrpcMessagesClient;
 import sd2526.trab.discovery.Discovery;
 import sd2526.trab.api.java.*;
 import sd2526.trab.api.rest.RestGateway;
@@ -18,8 +20,8 @@ public class GatewayResource implements RestGateway {
   private String serviceName;
   private String domain;
   private Discovery discovery;
-  private RestMessagesClient localMessagesClient;
-  private RestUsersClient localUsersClient;
+  private Messages localMessagesClient;
+  private Users localUsersClient;
   private static Logger Log = Logger.getLogger(GatewayResource.class.getName());
 
   public GatewayResource(String serviceName, String domain, Discovery discovery) {
@@ -30,7 +32,7 @@ public class GatewayResource implements RestGateway {
     this.localUsersClient = null;
   }
 
-  private synchronized RestUsersClient getLocalUsersClient() {
+  private synchronized Users getLocalUsersClient() {
     if (localUsersClient != null) {
       return localUsersClient;
     }
@@ -46,7 +48,13 @@ public class GatewayResource implements RestGateway {
         Log.info("Server is not being able to delivering uris by multicast.");
         throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
       }
-      localUsersClient = new RestUsersClient(uris.value()[0]);
+
+      URI uri = uris.value()[0];
+      if (uri.getScheme().equals("grpc")) {
+        localUsersClient = new GrpcUsersClient(uri);
+      } else {
+        localUsersClient = new RestUsersClient(uri);
+      }
       return localUsersClient;
 
     } catch (WebApplicationException w) {
@@ -60,7 +68,7 @@ public class GatewayResource implements RestGateway {
     }
   }
 
-  private synchronized RestMessagesClient getLocalMessagesClient() {
+  private synchronized Messages getLocalMessagesClient() {
     if (this.localMessagesClient != null) {
       return this.localMessagesClient;
     }
@@ -76,8 +84,15 @@ public class GatewayResource implements RestGateway {
         Log.info("Server is not being able to delivering uris by multicast.");
         throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
       }
-      this.localMessagesClient = new RestMessagesClient(uris.value()[0]);
-      return this.localMessagesClient;
+
+      URI uri = uris.value()[0];
+      if (uri.getScheme().equals("grpc")) {
+        this.localMessagesClient = new GrpcMessagesClient(uri);
+      } else {
+        localMessagesClient = new RestMessagesClient(uri);
+      }
+
+      return localMessagesClient;
 
     } catch (WebApplicationException w) {
       // Deixamos passar o 503 para cima
@@ -92,7 +107,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public String postUser(User user) {
-    RestUsersClient userClient = getLocalUsersClient();
+    Users userClient = getLocalUsersClient();
 
     Result<String> result = userClient.postUser(user);
 
@@ -105,7 +120,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public User getUser(String name, String pwd) {
-    RestUsersClient userClient = getLocalUsersClient();
+    Users userClient = getLocalUsersClient();
     Result<User> result = userClient.getUser(name, pwd);
 
     if (result.isOK()) {
@@ -117,7 +132,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public User updateUser(String name, String pwd, User info) {
-    RestUsersClient userClient = getLocalUsersClient();
+    Users userClient = getLocalUsersClient();
     Result<User> result = userClient.updateUser(name, pwd, info);
 
     if (result.isOK()) {
@@ -129,7 +144,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public User deleteUser(String name, String pwd) {
-    RestUsersClient userClient = getLocalUsersClient();
+    Users userClient = getLocalUsersClient();
     Result<User> result = userClient.deleteUser(name, pwd);
 
     if (result.isOK()) {
@@ -141,7 +156,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public List<User> searchUsers(String name, String pwd, String pattern) {
-    RestUsersClient userClient = getLocalUsersClient();
+    Users userClient = getLocalUsersClient();
     Result<List<User>> result = userClient.searchUsers(name, pwd, pattern);
 
     if (result.isOK()) {
@@ -153,7 +168,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public String postMessage(String pwd, Message msg) {
-    RestMessagesClient messageClient = getLocalMessagesClient();
+    Messages messageClient = getLocalMessagesClient();
     Result<String> result = messageClient.postMessage(pwd, msg);
 
     if (result.isOK()) {
@@ -165,7 +180,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public Message getMessage(String name, String mid, String pwd) {
-    RestMessagesClient messageClient = getLocalMessagesClient();
+    Messages messageClient = getLocalMessagesClient();
     Result<Message> result = messageClient.getInboxMessage(name, mid, pwd);
 
     if (result.isOK()) {
@@ -177,7 +192,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public List<String> getMessages(String name, String pwd, String query) {
-    RestMessagesClient messageClient = getLocalMessagesClient();
+    Messages messageClient = getLocalMessagesClient();
     Result<List<String>> result = messageClient.searchInbox(name, pwd, query);
 
     if (result.isOK()) {
@@ -189,7 +204,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public void removeFromUserInbox(String name, String mid, String pwd) {
-    RestMessagesClient messageClient = getLocalMessagesClient();
+    Messages messageClient = getLocalMessagesClient();
     Result<Void> result = messageClient.removeInboxMessage(name, mid, pwd);
 
     if (result.isOK()) {
@@ -201,7 +216,7 @@ public class GatewayResource implements RestGateway {
 
   @Override
   public void deleteMessage(String name, String mid, String pwd) {
-    RestMessagesClient messageClient = getLocalMessagesClient();
+    Messages messageClient = getLocalMessagesClient();
     Result<Void> result = messageClient.deleteMessage(name, mid, pwd);
 
     if (result.isOK()) {

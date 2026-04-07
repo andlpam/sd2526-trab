@@ -1,5 +1,6 @@
 package sd2526.trab.server.rest.resources;
 
+import sd2526.trab.client.grpc.GrpcMessagesClient;
 import sd2526.trab.client.rest.RestGatewayClient;
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
@@ -173,19 +174,28 @@ public class MessagesResource implements RestMessages {
     }
 
     try {
+      // 1. Tentar encontrar a Gateway primeiro (Essencial para testes de Proxy)
       Result<URI[]> uris = d.knownUrisOf("Gateway", domain, 1);
-      if (uris.isOK()) {
-        Log.info("Found Gateway for domain " + domain);
-        Messages gtwClient = new RestGatewayClient(uris.value()[0]);
-        externalClients.putIfAbsent(domain, gtwClient);
-        return gtwClient;
+
+      // Se não houver Gateway, procura diretamente o servidor de Mensagens
+      if (!uris.isOK() || uris.value().length == 0) {
+        uris = d.knownUrisOf("Messages", domain, 1);
       }
 
-      Log.info("No Gateway found for " + domain + ". Falling back to Messages server.");
-      uris = d.knownUrisOf("Messages", domain, 1);
-      if (uris.isOK()) {
-        Messages msgClient = new RestMessagesClient(uris.value()[0]);
-        externalClients.putIfAbsent(domain, msgClient);
+      if (uris.isOK() && uris.value().length > 0) {
+        URI uri = uris.value()[0];
+        Messages msgClient;
+
+        // 2. Lógica Híbrida
+        if (uri.getScheme().equalsIgnoreCase("http")) {
+          msgClient = new RestMessagesClient(uri);
+        } else if (uri.getScheme().equalsIgnoreCase("grpc")) {
+          msgClient = new GrpcMessagesClient(uri);
+        } else {
+          throw new RuntimeException("Unknown URI scheme: " + uri.getScheme());
+        }
+
+        externalClients.put(domain, msgClient);
         return msgClient;
       }
 
@@ -198,7 +208,6 @@ public class MessagesResource implements RestMessages {
       e.printStackTrace();
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);
     }
-
   }
 
   private synchronized Users getLocalUsersClient() {
