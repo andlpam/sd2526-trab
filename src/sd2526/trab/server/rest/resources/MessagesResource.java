@@ -1,6 +1,7 @@
 package sd2526.trab.server.rest.resources;
 
 import sd2526.trab.client.grpc.GrpcMessagesClient;
+import sd2526.trab.client.grpc.GrpcUsersClient;
 import sd2526.trab.client.rest.RestGatewayClient;
 import sd2526.trab.client.rest.RestMessagesClient;
 import sd2526.trab.client.rest.RestUsersClient;
@@ -226,8 +227,14 @@ public class MessagesResource implements RestMessages {
         Log.info("Server is not being able to delivering uris by multicast.");
         throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
       }
-      localUsersClient = new RestUsersClient(uris.value()[0]);
-      return localUsersClient;
+      URI uri = uris.value()[0];
+      if (uri.getScheme().equals("grpc")) {
+        this.localUsersClient = new GrpcUsersClient(uri);
+      } else {
+        this.localUsersClient = new RestUsersClient(uri);
+      }
+
+      return this.localUsersClient;
 
     } catch (WebApplicationException w) {
 

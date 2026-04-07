@@ -98,7 +98,7 @@ public class GrpcUsersController implements GrpcUsersGrpc.AsyncService, Bindable
     String name = request.getName();
     String pwd = request.getPwd();
 
-    if (name.isEmpty() || pwd.isEmpty()) {
+    if (name.isEmpty()) {
       responseObserver.onError(errorCodeToStatus(Result.ErrorCode.BAD_REQUEST));
       return;
     }
@@ -128,7 +128,7 @@ public class GrpcUsersController implements GrpcUsersGrpc.AsyncService, Bindable
     String pwd = request.getPwd();
     GrpcUser info = request.getInfo();
 
-    if (name.isEmpty() || pwd.isEmpty() || !request.hasInfo()) {
+    if (name.isEmpty() || !request.hasInfo()) {
       responseObserver.onError(errorCodeToStatus(Result.ErrorCode.BAD_REQUEST));
       return;
     }
@@ -170,7 +170,7 @@ public class GrpcUsersController implements GrpcUsersGrpc.AsyncService, Bindable
     String name = request.getName();
     String pwd = request.getPwd();
 
-    if (name.isEmpty() || pwd.isEmpty()) {
+    if (name.isEmpty()) {
       responseObserver.onError(errorCodeToStatus(Result.ErrorCode.BAD_REQUEST));
       return;
     }
@@ -211,7 +211,7 @@ public class GrpcUsersController implements GrpcUsersGrpc.AsyncService, Bindable
     String pwd = request.getPwd();
     String pattern = request.getQuery();
 
-    if (name.isEmpty() || pwd.isEmpty()) {
+    if (name.isEmpty()) {
       responseObserver.onError(errorCodeToStatus(Result.ErrorCode.BAD_REQUEST));
       return;
     }

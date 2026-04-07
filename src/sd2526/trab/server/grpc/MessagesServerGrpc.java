@@ -25,13 +25,13 @@ public class MessagesServerGrpc {
       domain = hostname.substring(hostname.indexOf('.') + 1);
     }
     String ip = InetAddress.getLocalHost().getHostAddress();
-    String serverURI = String.format(SERVER_BASE_URI, InetAddress.getLocalHost(), PORT, GRPC_CTX);
+    String serverURI = String.format(SERVER_BASE_URI, ip, PORT, GRPC_CTX);
 
     Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
     discovery.start();
     GrpcMessagesController stub = new GrpcMessagesController(domain, discovery);
     ServerCredentials cred = InsecureServerCredentials.create();
-    Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub).build();
+    Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub.bindService()).build();
 
     Log.info(String.format("Users gRPC Server ready @ %s\n", serverURI));
     server.start().awaitTermination();
