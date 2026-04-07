@@ -231,8 +231,6 @@ public class GrpcUsersController implements GrpcUsersGrpc.AsyncService, Bindable
 
       List<User> hits = hibernate.jpql(query, User.class);
 
-      // No gRPC, como a função retorna um `stream GrpcUser`, nós iteramos pela
-      // lista de resultados e enviamos UM A UM usando o responseObserver.onNext()
       for (User u : hits) {
 
         User cleanUser = new User(u.getName(), "", u.getDisplayName(), u.getDomain());

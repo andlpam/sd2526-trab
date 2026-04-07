@@ -175,10 +175,8 @@ public class MessagesResource implements RestMessages {
     }
 
     try {
-      // 1. Tentar encontrar a Gateway primeiro (Essencial para testes de Proxy)
       Result<URI[]> uris = d.knownUrisOf("Gateway", domain, 1);
 
-      // Se não houver Gateway, procura diretamente o servidor de Mensagens
       if (!uris.isOK() || uris.value().length == 0) {
         uris = d.knownUrisOf("Messages", domain, 1);
       }
@@ -187,7 +185,6 @@ public class MessagesResource implements RestMessages {
         URI uri = uris.value()[0];
         Messages msgClient;
 
-        // 2. Lógica Híbrida
         if (uri.getScheme().equalsIgnoreCase("http")) {
           msgClient = new RestMessagesClient(uri);
         } else if (uri.getScheme().equalsIgnoreCase("grpc")) {
@@ -204,7 +201,7 @@ public class MessagesResource implements RestMessages {
       throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
 
     } catch (WebApplicationException w) {
-      throw w; // Propaga os nossos próprios erros HTTP
+      throw w;
     } catch (Exception e) {
       e.printStackTrace();
       throw new WebApplicationException(Status.INTERNAL_SERVER_ERROR);

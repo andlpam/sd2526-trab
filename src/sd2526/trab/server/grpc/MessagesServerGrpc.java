@@ -33,7 +33,7 @@ public class MessagesServerGrpc {
     ServerCredentials cred = InsecureServerCredentials.create();
     Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub.bindService()).build();
 
-    Log.info(String.format("Users gRPC Server ready @ %s\n", serverURI));
+    Log.info(String.format("Messages gRPC Server ready @ %s\n", serverURI));
     server.start().awaitTermination();
   }
 }

@@ -16,7 +16,6 @@ import sd2526.trab.server.persistence.Hibernate;
 import sd2526.trab.api.java.Result;
 import sd2526.trab.api.java.Result.ErrorCode;
 import sd2526.trab.client.rest.RestMessagesClient;
-// Assume que terás um GrpcMessagesClient para falar com outros domínios gRPC
 import sd2526.trab.client.grpc.GrpcMessagesClient;
 import sd2526.trab.client.grpc.GrpcUsersClient;
 import sd2526.trab.api.java.Messages;
@@ -82,28 +81,12 @@ public class GrpcMessagesController implements GrpcMessagesGrpc.AsyncService, Bi
           responseObserver.onError(Status.INVALID_ARGUMENT.asException());
           return;
         }
-
         Users usersClient = getLocalUsersClient();
-        Result<User> result = null;
-
-        // AQUI ESTÁ A CORREÇÃO QUE FALTAVA! O Retry para evitar atirar 403 por causa de
-        // falhas de rede.
-        for (int i = 0; i < 5; i++) {
-          result = usersClient.getUser(getOnlyTheName(sender_name), pwd);
-          if (result.isOK() || result.error() == ErrorCode.FORBIDDEN || result.error() == ErrorCode.NOT_FOUND) {
-            break; // Se a resposta for definitiva (sucesso ou pass errada), sai do ciclo
-          }
-          try {
-            Thread.sleep(200);
-          } catch (InterruptedException ignored) {
-          }
-        }
-
-        if (result == null || !result.isOK()) {
+        Result<User> result = usersClient.getUser(getOnlyTheName(sender_name), pwd);
+        if (!result.isOK()) {
           responseObserver.onError(Status.PERMISSION_DENIED.asException());
           return;
         }
-
         msg.setId(UUID.randomUUID().toString());
         msg.setSender(result.value().getDisplayName() + " <" + sender_name + ">");
         msg.setCreationTime(System.currentTimeMillis());
@@ -417,23 +400,19 @@ public class GrpcMessagesController implements GrpcMessagesGrpc.AsyncService, Bi
     else if (name.matches(REGEX_LOCAL) && getDomain(name).equals(this.domain)) {
       Users usersClient = getLocalUsersClient();
       int max_retries = 15;
-
       for (int i = 0; i < max_retries; i++) {
-        Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
-
-        if (result.isOK() && result.value() != null) {
-          return true;
-        }
-
-        if (result.error() == ErrorCode.FORBIDDEN || result.error() == ErrorCode.NOT_FOUND) {
-          return false;
-        }
-
-        if (i == max_retries - 1)
-          break;
         try {
-          Thread.sleep(200 + (i * 50));
-        } catch (InterruptedException ignored) {
+          Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
+          if (result.isOK() && result.value() != null)
+            return true;
+          return false;
+        } catch (Exception e) {
+          if (i == max_retries - 1)
+            break;
+          try {
+            Thread.sleep(200 + (i * 50));
+          } catch (InterruptedException ignored) {
+          }
         }
       }
       throw new RuntimeException("Service Unavailable");
@@ -538,10 +517,8 @@ public class GrpcMessagesController implements GrpcMessagesGrpc.AsyncService, Bi
     }
 
     try {
-      // 1. Tentar encontrar a Gateway primeiro
       Result<URI[]> uris = d.knownUrisOf("Gateway", domain, 1);
 
-      // Se não houver Gateway, procura diretamente o servidor de Mensagens
       if (!uris.isOK() || uris.value().length == 0) {
         uris = d.knownUrisOf("Messages", domain, 1);
       }
@@ -550,7 +527,6 @@ public class GrpcMessagesController implements GrpcMessagesGrpc.AsyncService, Bi
         URI uri = uris.value()[0];
         Messages msgClient;
 
-        // 2. Lógica Híbrida
         if (uri.getScheme().equalsIgnoreCase("http")) {
           msgClient = new RestMessagesClient(uri);
         } else if (uri.getScheme().equalsIgnoreCase("grpc")) {
