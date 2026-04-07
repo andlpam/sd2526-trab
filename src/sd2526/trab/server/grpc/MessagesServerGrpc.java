@@ -31,9 +31,9 @@ public class MessagesServerGrpc {
     discovery.start();
     GrpcMessagesController stub = new GrpcMessagesController(domain, discovery);
     ServerCredentials cred = InsecureServerCredentials.create();
-    Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub).
+    Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub).build();
 
-        Log.info(String.format("Users gRPC Server ready @ %s\n", serverURI));
+    Log.info(String.format("Users gRPC Server ready @ %s\n", serverURI));
     server.start().awaitTermination();
   }
 }

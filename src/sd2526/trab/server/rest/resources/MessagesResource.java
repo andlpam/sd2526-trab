@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
 import sd2526.trab.server.persistence.Hibernate;
 
 public class MessagesResource implements RestMessages {
@@ -401,7 +402,7 @@ public class MessagesResource implements RestMessages {
             targetExists = true;
           } else {
             Users usersClient = getLocalUsersClient();
-            String tempPwd = java.util.UUID.randomUUID().toString();
+            String tempPwd = UUID.randomUUID().toString();
             User probeUser = new User(targetName, tempPwd, "Sonda", this.domain);
 
             targetExists = false;
