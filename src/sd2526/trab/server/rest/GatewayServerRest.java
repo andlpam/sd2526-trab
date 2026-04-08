@@ -17,7 +17,7 @@ public class GatewayServerRest {
   public static final String SERVICE_NAME = "Gateway";
   private static final String SERVER_URI_FMT = "http://%s:%s/rest";
 
-  // Oficial rules for using Jersey
+
   static {
     System.setProperty("java.net.preferIPv4Stack", "true");
     System.setProperty("java.util.logging.SimpleFormatter.format", "%4$s: %5$s\n");
@@ -28,9 +28,9 @@ public class GatewayServerRest {
 
       ResourceConfig config = new ResourceConfig();
 
-      // can be messages.fct, messages.fcsh etc..
+   
       String hostname = InetAddress.getLocalHost().getHostName();
-      // Get the cur host domain
+      
       String domain = "";
       if (hostname.contains(".")) {
         domain = hostname.substring(hostname.indexOf('.') + 1);
@@ -38,13 +38,13 @@ public class GatewayServerRest {
       String ip = InetAddress.getLocalHost().getHostAddress();
       String serverURI = String.format(SERVER_URI_FMT, ip, PORT);
 
-      // Create the discovery and start the threads
+      
       Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
       discovery.start();
-      // Server resource need the discovery mechanism..
+      
       GatewayResource res = new GatewayResource(SERVICE_NAME, domain, discovery);
       config.register(res);
-      // Load the server
+     
       JdkHttpServerFactory.createHttpServer(URI.create(serverURI), config);
       Log.info(String.format("%s Server ready @ %s\n", SERVICE_NAME, serverURI));
     } catch (Exception e) {

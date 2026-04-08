@@ -29,7 +29,7 @@ public class MessagesServerGrpc {
 
     Discovery discovery = new Discovery(Discovery.DISCOVERY_ADDR, SERVICE_NAME, domain, serverURI);
     discovery.start();
-    GrpcMessagesController stub = new GrpcMessagesController(domain, discovery);
+    GrpcMessagesController stub = new GrpcMessagesController(SERVICE_NAME, domain, discovery);
     ServerCredentials cred = InsecureServerCredentials.create();
     Server server = Grpc.newServerBuilderForPort(PORT, cred).addService(stub.bindService()).build();
 
