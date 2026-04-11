@@ -644,6 +644,14 @@ public class JavaMessages implements Messages {
               return Result.error(ErrorCode.FORBIDDEN);
           }
 
+          if (isOriginatingServer && msg.getCreationTime() > 0) {
+            long messageAge = System.currentTimeMillis() - msg.getCreationTime();
+            if (messageAge > 30000) {
+              Log.info("DeleteMessage: User request ignored, message is too old (" + (messageAge / 1000) + "s).");
+              return Result.ok();
+            }
+          }
+
           for (String destination : msg.getDestination()) {
             if (checkIfUserIsFromDomain(destination)) {
               synchronized (destination.intern()) {
@@ -661,15 +669,13 @@ public class JavaMessages implements Messages {
           hibernate.delete(msg);
           msgToPropagate = msg;
         }
-
         break;
 
       } catch (Exception e) {
         if (i == 2) {
-          Log.severe("Failed to delete message after retries: " + e.getMessage());
+          Log.severe("Failed to delete message after 3 retries: " + e.getMessage());
           return Result.error(ErrorCode.INTERNAL_ERROR);
         }
-
         remoteDestinations.clear();
         msgToPropagate = null;
         try {

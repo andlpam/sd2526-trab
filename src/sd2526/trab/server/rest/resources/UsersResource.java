@@ -3,10 +3,8 @@ package sd2526.trab.server.rest.resources;
 import sd2526.trab.api.User;
 import sd2526.trab.api.rest.RestUsers;
 import sd2526.trab.server.java.JavaUsers;
-import jakarta.inject.Singleton;
 import java.util.List;
 
-@Singleton
 public class UsersResource extends RestResource implements RestUsers {
 
   final JavaUsers impl;
