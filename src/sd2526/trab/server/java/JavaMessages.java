@@ -32,6 +32,25 @@ public class JavaMessages implements Messages {
   private final String domain;
   private final Hibernate hibernate;
 
+  // System constants and Remote messages
+  private static final String SYSTEM_SENDER = "<System>";
+  private static final String DELETED_SENDER = "<Deleted>";
+  private static final String PROBE_PWD_PREFIX = "Sonda";
+
+  // Timeouts
+  private static final long FAST_THREAD_TIMEOUT_MS = 2000L;
+  private static final long BACKGROUND_THREAD_TIMEOUT_MS = 90000L;
+  private static final long BACKGROUND_MIN_REMAINING_MS = 35000L;
+  private static final long MAX_DELETE_AGE_MS = 30000L;
+
+
+  // Retries and waits
+  private static final int MAX_DB_RETRIES = 3;
+  private static final int MAX_PROBE_RETRIES = 5;
+  private static final long SLEEP_PROBE_RETRY_MS = 200L;
+  private static final long SLEEP_DB_RETRY_BASE_MS = 50L;
+  private static final long INBOX_READ_RETRY_MS = 500L; 
+
   private final Map<String, Messages> externalClients = new ConcurrentHashMap<>();
 
   private final ClientFactory<Users> usersFactory;
@@ -85,10 +104,13 @@ public class JavaMessages implements Messages {
   private boolean checkUserExistenceAndPassword(String name, String pwd) {
     if (name == null)
       return false;
-    if (name.equals("<System>"))
+      
+    // The internal system does not need password validation
+    if (name.equals(SYSTEM_SENDER))
       return true;
 
     if (name.matches(REGEX_LOCAL) && getDomain(name).equals(this.domain)) {
+      // If the user is from our domain, we call the Users service to validate credentials
       try {
         Users usersClient = usersFactory.get(d, this.domain);
         Result<User> result = usersClient.getUser(getOnlyTheName(name), pwd);
@@ -97,19 +119,30 @@ public class JavaMessages implements Messages {
         return false;
       }
     } else if (name.matches(REGEX_FORWARDING) && !getDomain(name).equals(this.domain)) {
+      // If it's a forwarding user from another domain, 
+      // we accept it upfront since actual validation happens at the destination server.
       return true;
     }
-    return false;
+    
+    return false; // Fail-safe: return false if no conditions are met
   }
 
   private Message generateErrorMessage(String failedDest, Message msg) {
     Message fail = new Message();
+    
+    // The error message ID is the original ID concatenated with the failed destination,
+    // helping to quickly identify it as a Bounce/Failure Notification.
     fail.setId(msg.getId() + "." + failedDest);
+    
     fail.setSender(msg.getSender());
+    // The destination of the error message becomes the original sender (return to sender)
     fail.setDestination(Collections.singleton(formatSenderNameFromMsg(msg.getSender())));
+    
+    // Clear subject indicating the reason for the failure
     fail.setSubject("FAILED TO SEND " + msg.getId() + " TO " + failedDest + ": UNKNOWN USER");
     fail.setContents(msg.getContents());
     fail.setCreationTime(System.currentTimeMillis());
+    
     return fail;
   }
 
@@ -117,16 +150,19 @@ public class JavaMessages implements Messages {
     String sender = formatSenderNameFromMsg(msg.getSender());
     String cleanSender = getOnlyTheName(sender) + "@" + getDomain(sender);
 
+    // 1. Group destinations by Domain to send messages in batches / minimize network calls
     Map<String, List<String>> domainsMap = new ConcurrentHashMap<>();
     for (String dest : destinations) {
       String targetDomain = getDomain(dest);
       domainsMap.computeIfAbsent(targetDomain, k -> new ArrayList<>()).add(dest);
     }
 
+    // 2. Iterate over each target domain
     for (Map.Entry<String, List<String>> entry : domainsMap.entrySet()) {
       String targetDomain = entry.getKey();
       List<String> targetDestinations = entry.getValue();
 
+      // Local handling (optimization: no need to hit the network)
       if (targetDomain.equals(this.domain)) {
         for (String dest : targetDestinations) {
           if (choice == POSTMESSAGE) {
@@ -140,6 +176,7 @@ public class JavaMessages implements Messages {
 
       final long startTime = System.currentTimeMillis();
 
+      // 3. First attempt: Fast Synchronous Thread (with a tight timeout)
       try {
         Messages msgClient = getExternalClient(targetDomain);
         final Result<?>[] syncResult = new Result<?>[1];
@@ -152,12 +189,12 @@ public class JavaMessages implements Messages {
               syncResult[0] = msgClient.deleteMessage(cleanSender, msg.getId(), pwd);
             }
           } catch (Exception e) {
-            // Ignoramos erros de rede, o timeout trata disso
+            // Ignore network errors here, as the timeout or background thread will handle them
           }
         });
 
         fastThread.start();
-        fastThread.join(2000);
+        fastThread.join(FAST_THREAD_TIMEOUT_MS);
 
         if (fastThread.isAlive()) {
           fastThread.interrupt();
@@ -167,43 +204,44 @@ public class JavaMessages implements Messages {
         Result<?> result = syncResult[0];
         if (result != null) {
           if (result.isOK()) {
-            continue;
+            continue; // Success in the synchronous thread, skip to the next domain
           } else if (result.error() == ErrorCode.NOT_FOUND ||
               result.error() == ErrorCode.FORBIDDEN ||
               result.error() == ErrorCode.BAD_REQUEST) {
 
+            // Definitive errors (4xx). If it's a POST and not already a Bounce, generate a failure notification.
             if (choice == POSTMESSAGE && !msg.getId().contains(".")) {
               for (String failedDest : targetDestinations) {
                 Message notification = generateErrorMessage(failedDest, msg);
                 propagateMessage(pwd, notification, Collections.singletonList(cleanSender), POSTMESSAGE);
               }
             }
-            continue;
+            continue; // Error handled, skip to the next domain
           }
         } else {
           throw new RuntimeException("Result null");
         }
       } catch (Exception e) {
-        Log.info("Tentativa síncrona abortada para " + targetDomain + ". A passar para Thread de Background...");
+        Log.info("Synchronous attempt aborted for " + targetDomain + ". Moving to Background Thread...");
       }
 
+      // 4. Fallback: Background Thread for long-running retries (tolerance to temporary failures)
       new Thread(() -> {
-        long timeoutMillis = 90 * 1000;
         boolean success = false;
         boolean unknownUser = false;
 
         while (true) {
           long elapsed = System.currentTimeMillis() - startTime;
-          if (elapsed >= timeoutMillis)
+          if (elapsed >= BACKGROUND_THREAD_TIMEOUT_MS)
             break;
 
-          if (timeoutMillis - elapsed < 35000) {
+          // Protection against excessively short wait times or infinite loops stuck at the end of the timeout
+          if (BACKGROUND_THREAD_TIMEOUT_MS - elapsed < BACKGROUND_MIN_REMAINING_MS) {
             try {
-              long sleepTime = timeoutMillis - elapsed;
+              long sleepTime = BACKGROUND_THREAD_TIMEOUT_MS - elapsed;
               if (sleepTime > 0)
                 Thread.sleep(sleepTime);
-            } catch (InterruptedException e) {
-            }
+            } catch (InterruptedException e) { }
             break;
           }
 
@@ -225,18 +263,18 @@ public class JavaMessages implements Messages {
                 result.error() == ErrorCode.BAD_REQUEST) {
               if (result.error() == ErrorCode.NOT_FOUND)
                 unknownUser = true;
-              break;
+              break; // Definitive failure, no point in continuing to retry
             }
-          } catch (Exception e) {
-          }
+          } catch (Exception e) { }
 
           try {
-            Thread.sleep(100);
+            Thread.sleep(100); // Light backoff before the next retry in the loop
           } catch (InterruptedException e) {
             break;
           }
         }
 
+        // 5. If it failed definitively after all retries and isn't already a Bounce notice
         if (!success && choice == POSTMESSAGE && !msg.getId().contains(".")) {
           Log.info("TIMEOUT REACHED (90s): Generating failed notification to " + sender);
 
@@ -246,6 +284,7 @@ public class JavaMessages implements Messages {
               notification.setSubject("FAILED TO SEND " + msg.getId() + " TO " + failedDest + ": TIMEOUT");
             }
 
+            // Try to deliver the notification locally first, fallback to normal propagation
             try {
               Messages localClient = getExternalClient(getDomain(cleanSender));
               localClient.postMessage(pwd, notification);
@@ -259,57 +298,65 @@ public class JavaMessages implements Messages {
   }
 
   private Result<Void> assignMessageToUsers(String des, String pwd, Message msg) {
-
-    for (int retry = 0; retry < 3; retry++) {
+    // Retry loop to mitigate DB concurrency issues (ConstraintViolations or Locks)
+    for (int retry = 0; retry < MAX_DB_RETRIES; retry++) {
+      // Synchronize using the destination string from the pool (intern) to prevent 
+      // two threads from trying to create the same user's inbox simultaneously
       synchronized (des.intern()) {
         try {
           UserInbox usrIn = hibernate.get(UserInbox.class, des);
 
           if (usrIn == null) {
             String senderRaw = formatSenderNameFromMsg(msg.getSender());
-            boolean isSystem = "<System>".equals(senderRaw);
+            boolean isSystem = SYSTEM_SENDER.equals(senderRaw);
             boolean isBounceNotice = msg.getId() != null && msg.getId().contains(".");
             String targetName = getOnlyTheName(des);
-
             boolean targetExists = false;
 
+            // If it's from the System or an Error Notification, we assume the destination 
+            // is valid to ensure critical alerts are delivered
             if (isSystem || isBounceNotice) {
               targetExists = true;
             } else {
+              // Otherwise, we use a "Probe User" to test if the target exists in the Users microservice.
+              // We try to create a fake user. If it returns CONFLICT, the target already exists.
               Users usersClient = usersFactory.get(d, this.domain);
               String tempPwd = UUID.randomUUID().toString();
-              User probeUser = new User(targetName, tempPwd, "Sonda", this.domain);
+              User probeUser = new User(targetName, tempPwd, PROBE_PWD_PREFIX, this.domain);
 
               targetExists = false;
 
-              for (int i = 0; i < 5; i++) {
+              for (int i = 0; i < MAX_PROBE_RETRIES; i++) {
                 try {
                   Result<String> probeRes = usersClient.postUser(probeUser);
 
                   if (probeRes.isOK()) {
+                    // Probe successfully created: the target DID NOT exist. We clean up the probe.
                     targetExists = false;
                     try {
                       usersClient.deleteUser(targetName, tempPwd);
-                    } catch (Exception ignored) {
-                    }
+                    } catch (Exception ignored) { }
                     break;
                   } else if (probeRes.error() == ErrorCode.CONFLICT) {
+                    // Conflict: The target user EXISTS (which is what we wanted to confirm).
                     targetExists = true;
                     break;
                   } else if (probeRes.error() == ErrorCode.TIMEOUT || probeRes.error() == ErrorCode.INTERNAL_ERROR) {
-                    if (i < 4) {
-                      Thread.sleep(200);
+                    // Transient errors: sleep and retry
+                    if (i < MAX_PROBE_RETRIES - 1) {
+                      Thread.sleep(SLEEP_PROBE_RETRY_MS);
                       continue;
                     } else {
-                      targetExists = true;
+                      // If we run out of retries due to timeouts, assume true to avoid losing the message
+                      targetExists = true; 
                     }
                   } else {
                     targetExists = false;
                     break;
                   }
                 } catch (Exception e) {
-                  if (i < 4) {
-                    Thread.sleep(200);
+                  if (i < MAX_PROBE_RETRIES - 1) {
+                    Thread.sleep(SLEEP_PROBE_RETRY_MS);
                   } else {
                     targetExists = true;
                   }
@@ -317,14 +364,17 @@ public class JavaMessages implements Messages {
               }
             }
 
+            // If the target definitively does not exist, return NOT_FOUND
             if (!targetExists) {
               return Result.error(ErrorCode.NOT_FOUND);
             }
 
+            // Create and persist the new Inbox for the user
             usrIn = new UserInbox(des);
             hibernate.persist(usrIn);
           }
 
+          // Idempotency check: only add the message if it's not already in the Inbox
           Message obtained_msg_inbox = usrIn.checkIfMessageInInbox(msg.getId());
           if (obtained_msg_inbox == null) {
             usrIn.addMessage(msg);
@@ -336,15 +386,15 @@ public class JavaMessages implements Messages {
         } catch (ConstraintViolationException e) {
           return Result.error(ErrorCode.CONFLICT);
         } catch (Exception e) {
-          if (retry == 2) {
-            Log.severe("Erro interno de Base de Dados: " + e.getMessage());
+          // Log and return error only on the last attempt
+          if (retry == MAX_DB_RETRIES - 1) {
+            Log.severe("Internal Database Error: " + e.getMessage());
             return Result.error(ErrorCode.INTERNAL_ERROR);
           }
-
           try {
-            Thread.sleep(50 + (int) (Math.random() * 50));
-          } catch (InterruptedException ignored) {
-          }
+            // Random backoff to desynchronize threads (jitter)
+            Thread.sleep(SLEEP_DB_RETRY_BASE_MS + (int) (Math.random() * 50));
+          } catch (InterruptedException ignored) {}
         }
       }
     }
@@ -420,7 +470,7 @@ public class JavaMessages implements Messages {
     List<Message> failureNoticesToPropagate = new ArrayList<>();
 
     boolean persistSuccess = false;
-    for (int retry = 0; retry < 3; retry++) {
+    for (int retry = 0; retry < MAX_DB_RETRIES; retry++) {
       try {
         synchronized (msg.getId().intern()) {
           Message existing = hibernate.get(Message.class, msg.getId());
@@ -441,7 +491,7 @@ public class JavaMessages implements Messages {
           return Result.error(ErrorCode.INTERNAL_ERROR);
         }
         try {
-          Thread.sleep(50 + (int) (Math.random() * 50));
+          Thread.sleep(SLEEP_DB_RETRY_BASE_MS + (int) (Math.random() * SLEEP_DB_RETRY_BASE_MS));
         } catch (InterruptedException ignored) {
         }
       }
@@ -456,7 +506,7 @@ public class JavaMessages implements Messages {
         if (!res.isOK() && res.error() == ErrorCode.NOT_FOUND) {
           Message failureNotice = generateErrorMessage(destination, msg);
 
-          for (int retry = 0; retry < 3; retry++) {
+          for (int retry = 0; retry < MAX_DB_RETRIES; retry++) {
             try {
               if (hibernate.get(Message.class, failureNotice.getId()) == null) {
                 hibernate.persist(failureNotice);
@@ -464,7 +514,7 @@ public class JavaMessages implements Messages {
               break;
             } catch (Exception e) {
               try {
-                Thread.sleep(50);
+                Thread.sleep(SLEEP_DB_RETRY_BASE_MS);
               } catch (InterruptedException ignored) {
               }
             }
@@ -513,7 +563,7 @@ public class JavaMessages implements Messages {
 
       if (msg == null) {
         try {
-          Thread.sleep(500);
+          Thread.sleep(INBOX_READ_RETRY_MS);
         } catch (InterruptedException e) {
 
         }
@@ -573,7 +623,7 @@ public class JavaMessages implements Messages {
     if (!checkUserExistenceAndPassword(fullName, pwd))
       return Result.error(ErrorCode.FORBIDDEN);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < MAX_DB_RETRIES; i++) {
       try {
         synchronized (fullName.intern()) {
           UserInbox inbox = hibernate.get(UserInbox.class, fullName);
@@ -587,12 +637,12 @@ public class JavaMessages implements Messages {
         return Result.ok();
       } catch (Exception e) {
         if (i == 2) {
-          Log.severe("Erro de concorrência no remove após 3 tentativas: " + e.getMessage());
+          Log.severe("Erro de concorrência no remove após algumas tentativas: " + e.getMessage());
           return Result.error(ErrorCode.INTERNAL_ERROR);
         }
 
         try {
-          Thread.sleep(50);
+          Thread.sleep(SLEEP_DB_RETRY_BASE_MS);
         } catch (InterruptedException ignored) {
         }
       }
@@ -610,7 +660,7 @@ public class JavaMessages implements Messages {
     List<String> remoteDestinations = new ArrayList<>();
     Message msgToPropagate = null;
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < MAX_DB_RETRIES; i++) {
       try {
         synchronized (mid.intern()) {
           Message msg = hibernate.get(Message.class, mid);
@@ -646,7 +696,7 @@ public class JavaMessages implements Messages {
 
           if (isOriginatingServer && msg.getCreationTime() > 0) {
             long messageAge = System.currentTimeMillis() - msg.getCreationTime();
-            if (messageAge > 30000) {
+            if (messageAge > MAX_DELETE_AGE_MS) {
               Log.info("DeleteMessage: User request ignored, message is too old (" + (messageAge / 1000) + "s).");
               return Result.ok();
             }
@@ -673,13 +723,13 @@ public class JavaMessages implements Messages {
 
       } catch (Exception e) {
         if (i == 2) {
-          Log.severe("Failed to delete message after 3 retries: " + e.getMessage());
+          Log.severe("Failed to delete message after algumas retries: " + e.getMessage());
           return Result.error(ErrorCode.INTERNAL_ERROR);
         }
         remoteDestinations.clear();
         msgToPropagate = null;
         try {
-          Thread.sleep(50 + (int) (Math.random() * 50));
+          Thread.sleep(SLEEP_DB_RETRY_BASE_MS + (int) (Math.random() * SLEEP_DB_RETRY_BASE_MS));
         } catch (InterruptedException ignored) {
         }
       }
